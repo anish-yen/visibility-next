@@ -11,6 +11,8 @@ def _is_public_path(path: str) -> bool:
         return True
     if path.startswith("/docs") or path.startswith("/redoc"):
         return True
+    if path == "/test-crawl" or path == "/test-gemini":
+        return True
     return False
 
 

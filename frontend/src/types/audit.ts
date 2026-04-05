@@ -19,6 +19,9 @@ export type PromptRow = {
   text: string;
   mentioned: boolean;
   score: number;
+  intent?: string | null;
+  answer_summary?: string | null;
+  competitor_mentions?: string[] | null;
 };
 
 export type ContentBrief = {

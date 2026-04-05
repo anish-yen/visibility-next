@@ -1,5 +1,72 @@
 AI Search Visibility Auditor — PRD + HLD
 
+> **Scope authority:** Use the attached PRD/HLD PDF as the source of truth for product scope and architecture. **V2** includes a multi-agent optimization loop (diagnose → rewrite → retest); it is **not** in the current MVP. This product delivers **directional simulated AI visibility** through a **controlled internal pipeline** — not live scraping of ChatGPT, Gemini, or Perplexity, and not autonomous editing of customer websites.
+
+## Part 0 — Current implementation (living)
+
+### Stack (as built)
+
+| Layer | Choice |
+| ----- | ------ |
+| Frontend | Next.js 14, React, Tailwind, Supabase Auth (SSR) |
+| Backend API | FastAPI |
+| Auth validation | Supabase `GET /auth/v1/user` + `apikey` (no local JWT secret) |
+| Audit storage | **In-memory** (`audit_store`) — no Postgres persistence for audits yet |
+| Job execution | **asyncio** `create_task` on `POST /audits` — **Celery/Redis not wired** for audits |
+| Crawler | **Real** `services/crawler.py`: sitemap/nav, `robots.txt`, 1 req/s, httpx + BeautifulSoup/lxml (**Playwright** in requirements for future JS sites) |
+| LLM | **Google Gemini** via official **`google-genai`** SDK (`GEMINI_API_KEY`). Default model **`gemini-2.5-flash`** for prompts, visibility simulation, and briefs. **Anthropic/Claude is not the default.** |
+
+### MVP pipeline (end-to-end)
+
+1. **Crawl** primary domain and each competitor (`crawl_site`) — up to 20 pages each; failures logged, partial data kept.
+2. **Prompt generation** — Gemini produces **15** JSON-tagged prompts (informational, comparative, transactional, trust).
+3. **Visibility evaluation** — For each prompt, Gemini answers as a helpful assistant with optional crawl context; a second structured pass scores mention strength (**0 / 0.5 / 1.0**). Failures keep partial rows; overall score = average × 100.
+4. **Recommendations** — Rule-based gaps from **actual** primary `page_type` set plus weak intent averages.
+5. **Content brief** — `POST .../brief` calls Gemini (JSON brief) with fallback text if the API fails.
+
+### Backend module map
+
+- `app/main.py` — app, CORS, `/health`, `/test-crawl`, `/test-gemini`, `/api/me`
+- `app/middleware.py` — Supabase token + anon key to Auth API
+- `app/audit_store.py`, `app/audit_pipeline.py`
+- `app/services/crawler.py`, `gemini_client.py`, `prompt_generator.py`, `visibility_evaluator.py`, `recommendations_builder.py`, `brief_generator.py`
+- `app/routers/audits.py` — `/audits` API for the dashboard
+
+### Environment variables (backend)
+
+See repo `.env.example`. Required for the LLM pipeline: **`GEMINI_API_KEY`**. Supabase: **`SUPABASE_URL`**, **`SUPABASE_ANON_KEY`**, **`SUPABASE_SERVICE_KEY`** (service for admin client when used).
+
+### Run locally
+
+```bash
+cd backend
+python -m venv .venv
+.venv\Scripts\activate   # Windows
+pip install -r requirements.txt
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+- **Gemini sanity:** open or curl `http://localhost:8000/test-gemini` (expects `GEMINI_API_KEY` in `backend/.env`).
+- **Crawl smoke:** `http://localhost:8000/test-crawl?domain=stripe.com`
+
+### Product messaging
+
+Visibility scores are **simulated, directional estimates**. They must **not** be marketed as guaranteed rankings or live measurements inside third-party AI apps.
+
+### Suggested next steps
+
+- Migrate `AuditState` to Supabase/Postgres; add Celery when jobs exceed HTTP timeouts.
+- Optional: Playwright path in crawler for heavy SPAs.
+- **V2 only:** LangGraph / multi-agent orchestration — **do not add for MVP.**
+
+---
+
 Part 1: Product Requirements Document (PRD)
 
 1. Product Name
@@ -374,14 +441,14 @@ Part 2: High-Level Design (HLD)
    Playwright + BeautifulSoup/lxml
    Handles JS-rendered sites
    AI/LLM
-   Anthropic Claude API (claude-sonnet-4)
-   Prompt generation, visibility eval, brief generation
+   Google Gemini API (google-genai SDK; e.g. gemini-2.5-flash)
+   Prompt generation, simulated visibility eval, content brief generation
    Embeddings
    Sentence-transformers or hosted API
    Optional for semantic similarity
    Job Queue
-   Celery + Redis
-   Reliable async job processing
+   Celery + Redis (planned; MVP audits use asyncio background tasks + in-memory store)
+   Reliable async job processing when persistence and scale require it
    Auth
    Supabase Auth
    Built-in, covers signup/login/password reset
@@ -472,7 +539,7 @@ Step 9: Display Results
    Free tier: 25–50 prompts; Pro/Agency: up to 100
    7.4 Visibility Evaluation Engine
    The engine does not query live AI engines. It:
-   Sends each prompt to Claude as "answer this as a customer-facing AI assistant would"
+   Sends each prompt through a controlled Gemini (or equivalent) pipeline as "answer this as a customer-facing AI assistant would"
    Parses the response to detect company and competitor mentions
    Scores by: mention presence, order, relevance, strength
    Runs 2–3 samples per prompt; returns averaged score and confidence
@@ -597,7 +664,7 @@ POST /projects Create project
 Part 3: 2-Week MVP Roadmap
 Assumptions
 Solo developer or very small team (1–2 people)
-Tech stack confirmed: Next.js frontend, FastAPI backend, Supabase (auth + DB), Celery + Redis, Claude API
+Tech stack confirmed: Next.js frontend, FastAPI backend, Supabase (auth + DB); MVP audits use asyncio + in-memory store; Gemini API (google-genai) for LLM steps; Celery + Redis when jobs are persisted and scaled.
 Goal: working end-to-end demo by end of Week 2
 
 Week 1 — Foundation and Data Pipeline
@@ -618,7 +685,7 @@ Audit job pipeline
 Celery + Redis setup. Audit job created on POST /audits. Stages: validate → crawl → mark complete. Status polling endpoint working. Frontend shows job status.
 Day 5
 Prompt generation
-Prompt engine generates 25–50 prompts from crawled content + templates + Claude API. Prompts tagged by intent. Stored in DB. Frontend displays prompt list.
+Prompt engine generates prompts from crawled content + Gemini (JSON). Prompts tagged by intent. Stored (DB when migrated; in-memory for current MVP). Frontend displays prompt list.
 
 Week 1 Exit Criteria: User can sign up, submit a domain, see it crawled, and see generated prompts.
 
@@ -628,7 +695,7 @@ Focus
 Deliverables
 Day 6
 Visibility evaluation
-Claude-based evaluation pipeline runs per prompt. Detects company + competitor mentions, scores visibility. Results stored. Multi-sample averaging (2–3 runs).
+Gemini-based simulated evaluation runs per prompt. Detects company + competitor mentions, scores visibility. Results stored. (Multi-sample averaging 2–3 runs is a future tuning step.)
 Day 7
 Content gap detection
 Analyzer cross-references missing page types against low-visibility prompts. ContentGap records generated.
@@ -637,7 +704,7 @@ Recommendation engine + scoring
 Weighted scoring formula applied. Ranked Recommendation records generated. GET /audits/{id}/recommendations returns sorted list.
 Day 9
 Content brief generation
-POST /recommendations/{id}/brief calls Claude to generate structured brief. Brief stored and retrievable. Frontend shows brief in a readable format.
+POST /recommendations/{id}/brief calls Gemini to generate structured brief. Brief stored and retrievable. Frontend shows brief in a readable format.
 Day 10
 Dashboard + polish
 Visibility score summary, competitor comparison, prompt table, opportunity list, brief viewer all wired into the dashboard. Error states handled (blocked crawl, failed eval). Basic audit history view.

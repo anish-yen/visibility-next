@@ -17,7 +17,9 @@ Monorepo scaffold: **Next.js 14** frontend with Supabase Auth, **FastAPI** backe
 5. Set **`NEXT_PUBLIC_API_URL`** to your FastAPI origin (e.g. `http://localhost:8000`) so the signed-in dashboard can call **`POST /audits`**, **`GET /audits`**, **`GET /audits/{id}`**, and **`POST /audits/{id}/recommendations/{rec_id}/brief`** with the Supabase access token.
 6. In Supabase **Authentication → URL Configuration**, add your site URL (e.g. `http://localhost:3000`) and redirect URLs: `http://localhost:3000/auth/callback`, `http://localhost:3000/update-password` (or your deployed equivalents).
 
-`ANTHROPIC_API_KEY`, `REDIS_URL`, and `DATABASE_URL` are reserved for upcoming crawl, LLM, and Postgres/Direct work.
+Set **`GEMINI_API_KEY`** in **`backend/.env`** for the audit pipeline (prompt generation, simulated visibility, content briefs) using the **`google-genai`** SDK. **`REDIS_URL`** and **`DATABASE_URL`** are reserved for future Celery/Postgres persistence.
+
+Sanity: **`GET http://localhost:8000/test-gemini`** (no auth) after the backend is running.
 
 ## Run the frontend (Next.js)
 

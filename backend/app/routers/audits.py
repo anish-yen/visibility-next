@@ -37,7 +37,18 @@ def _to_detail(a: audit_store.AuditState) -> AuditDetailOut:
         industry=a.industry,
         competitor_domains=a.competitor_domains,
         competitor_scores=[CompetitorScoreOut(**x) for x in a.competitor_scores],
-        prompts=[PromptRowOut(**x) for x in a.prompts],
+        prompts=[
+            PromptRowOut(
+                id=p["id"],
+                text=p["text"],
+                mentioned=p["mentioned"],
+                score=float(p["score"]),
+                intent=p.get("intent"),
+                answer_summary=p.get("answer_summary"),
+                competitor_mentions=p.get("competitor_mentions"),
+            )
+            for p in a.prompts
+        ],
         recommendations=[
             RecommendationOut(
                 id=r["id"],
@@ -78,7 +89,7 @@ async def create_audit(request: Request, body: AuditCreateBody) -> AuditSummaryO
         body.competitor_domains,
         body.industry,
     )
-    asyncio.create_task(audit_pipeline.run_simulated_audit(state.id))
+    asyncio.create_task(audit_pipeline.run_audit_pipeline(state.id))
     return _to_summary(state)
 
 
@@ -118,22 +129,25 @@ def generate_brief(
         )
 
     title = rec["title"]
-    body = (
-        f"## Objective\n\n"
-        f"Ship a page that supports **{title.lower()}** for `{a.primary_domain}`.\n\n"
-        f"## Target prompts\n\n"
-        f"- Cluster around *{a.industry or 'core buyer'}* intent and branded comparisons.\n"
-        f"- Answer the questions buyers ask before shortlisting vendors.\n\n"
-        f"## Suggested outline\n\n"
-        f"1. **Who this is for** — role, company size, trigger events.\n"
-        f"2. **Criteria** — what to evaluate (pricing, integrations, support).\n"
-        f"3. **How we compare** — honest positioning vs named alternatives.\n"
-        f"4. **Proof** — logos, metrics, quotes, methodology.\n"
-        f"5. **Next step** — trial, demo, or diagnostic CTA.\n\n"
-        f"## Internal links\n\n"
-        f"- Homepage positioning, pricing, docs/help, and 2–3 relevant use-case pages.\n\n"
-        f"_This is a scaffold brief; wire to Claude in production for richer output._\n"
-    )
-    brief = {"title": f"Brief: {title}", "body": body}
+    sample_prompts = [p.get("text", "") for p in a.prompts[:10] if p.get("text")]
+    try:
+        from app.services.brief_generator import generate_brief_markdown
+
+        brief = generate_brief_markdown(
+            recommendation_title=title,
+            recommendation_rationale=rec.get("rationale", ""),
+            primary_domain=a.primary_domain,
+            industry=a.industry,
+            sample_prompts=sample_prompts,
+        )
+    except Exception:
+        body = (
+            f"## Objective\n\n"
+            f"Ship a page that supports **{title.lower()}** for `{a.primary_domain}`.\n\n"
+            f"## Target prompts\n\n"
+            f"- Cluster around *{a.industry or 'core buyer'}* intent and branded comparisons.\n\n"
+            f"_Brief generation failed; this is a fallback outline._\n"
+        )
+        brief = {"title": f"Brief: {title}", "body": body}
     audit_store.attach_brief(audit_id, recommendation_id, brief)
     return BriefResponse(recommendation_id=recommendation_id, brief=ContentBriefOut(**brief))

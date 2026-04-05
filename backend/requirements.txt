@@ -5,3 +5,8 @@ supabase==2.10.0
 httpx
 pydantic
 pydantic-settings
+google-genai
+playwright
+beautifulsoup4
+lxml
+requests

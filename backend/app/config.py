@@ -1,23 +1,31 @@
-import os
+"""Application settings from environment (backend/.env when cwd is backend/)."""
+
 from functools import lru_cache
 
-from dotenv import load_dotenv
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
-load_dotenv()
+
+class Settings(BaseSettings):
+    supabase_url: str | None = None
+    supabase_anon_key: str | None = None
+    supabase_service_key: str | None = None
+    gemini_api_key: str | None = None
+    database_url: str | None = None
+    redis_url: str | None = None
+    # Legacy / optional; not used by the Gemini pipeline
+    anthropic_api_key: str | None = None
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
 
 @lru_cache
-def get_settings():
+def get_settings() -> Settings:
     return Settings()
 
 
-class Settings:
-    """Application settings from environment."""
-
-    def __init__(self) -> None:
-        self.supabase_url = os.environ.get("SUPABASE_URL", "")
-        self.supabase_anon_key = os.environ.get("SUPABASE_ANON_KEY", "")
-        self.supabase_service_key = os.environ.get("SUPABASE_SERVICE_KEY", "")
-        self.database_url = os.environ.get("DATABASE_URL", "")
-        self.redis_url = os.environ.get("REDIS_URL", "")
-        self.anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+# Singleton-style access for modules that prefer `from app.config import settings`
+settings = get_settings()

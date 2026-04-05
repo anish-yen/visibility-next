@@ -26,6 +26,8 @@ class AuditState:
     recommendations: list[dict[str, Any]]
     created_at: str
     error_message: str | None = None
+    # Crawl output (primary + competitors); not exposed on API to keep payloads small
+    crawled_pages: list[dict[str, Any]] = field(default_factory=list)
 
 
 _audits: dict[str, AuditState] = {}

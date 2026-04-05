@@ -25,6 +25,9 @@ class PromptRowOut(BaseModel):
     text: str
     mentioned: bool
     score: float
+    intent: str | None = None
+    answer_summary: str | None = None
+    competitor_mentions: list[str] | None = None
 
 
 class ContentBriefOut(BaseModel):
