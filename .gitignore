@@ -1,0 +1,13 @@
+.env
+.env.local
+backend/.env
+frontend/.env.local
+*.env
+backend/.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
