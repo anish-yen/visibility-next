@@ -27,6 +27,7 @@ def _to_summary(a: audit_store.AuditState) -> AuditSummaryOut:
         stage=a.stage,
         progress_percent=a.progress_percent,
         visibility_score=a.visibility_score,
+        target_mention_rate=a.target_mention_rate,
         created_at=a.created_at,
     )
 
@@ -48,6 +49,7 @@ def _to_detail(a: audit_store.AuditState) -> AuditDetailOut:
             )
             for r in a.recommendations
         ],
+        crawl_summary=a.crawl_summary,
         error_message=a.error_message,
     )
 
@@ -78,7 +80,7 @@ async def create_audit(request: Request, body: AuditCreateBody) -> AuditSummaryO
         body.competitor_domains,
         body.industry,
     )
-    asyncio.create_task(audit_pipeline.run_simulated_audit(state.id))
+    asyncio.create_task(audit_pipeline.run_audit(state.id))
     return _to_summary(state)
 
 
@@ -95,7 +97,7 @@ def get_audit(request: Request, audit_id: str) -> AuditDetailOut:
     "/audits/{audit_id}/recommendations/{recommendation_id}/brief",
     response_model=BriefResponse,
 )
-def generate_brief(
+async def generate_brief(
     request: Request,
     audit_id: str,
     recommendation_id: str,
@@ -117,23 +119,6 @@ def generate_brief(
             brief=ContentBriefOut(**rec["brief"]),
         )
 
-    title = rec["title"]
-    body = (
-        f"## Objective\n\n"
-        f"Ship a page that supports **{title.lower()}** for `{a.primary_domain}`.\n\n"
-        f"## Target prompts\n\n"
-        f"- Cluster around *{a.industry or 'core buyer'}* intent and branded comparisons.\n"
-        f"- Answer the questions buyers ask before shortlisting vendors.\n\n"
-        f"## Suggested outline\n\n"
-        f"1. **Who this is for** — role, company size, trigger events.\n"
-        f"2. **Criteria** — what to evaluate (pricing, integrations, support).\n"
-        f"3. **How we compare** — honest positioning vs named alternatives.\n"
-        f"4. **Proof** — logos, metrics, quotes, methodology.\n"
-        f"5. **Next step** — trial, demo, or diagnostic CTA.\n\n"
-        f"## Internal links\n\n"
-        f"- Homepage positioning, pricing, docs/help, and 2–3 relevant use-case pages.\n\n"
-        f"_This is a scaffold brief; wire to Claude in production for richer output._\n"
-    )
-    brief = {"title": f"Brief: {title}", "body": body}
+    brief = await audit_pipeline.generate_content_brief(a, rec)
     audit_store.attach_brief(audit_id, recommendation_id, brief)
     return BriefResponse(recommendation_id=recommendation_id, brief=ContentBriefOut(**brief))

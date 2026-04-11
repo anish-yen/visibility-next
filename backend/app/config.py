@@ -21,3 +21,5 @@ class Settings:
         self.database_url = os.environ.get("DATABASE_URL", "")
         self.redis_url = os.environ.get("REDIS_URL", "")
         self.anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        self.gemini_api_key = os.environ.get("GEMINI_API_KEY", "")
+        self.gemini_model = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")

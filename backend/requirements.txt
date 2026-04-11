@@ -3,5 +3,6 @@ uvicorn
 python-dotenv
 supabase==2.10.0
 httpx
+beautifulsoup4
 pydantic
 pydantic-settings

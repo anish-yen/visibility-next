@@ -25,6 +25,9 @@ class PromptRowOut(BaseModel):
     text: str
     mentioned: bool
     score: float
+    intent: str | None = None
+    explanation: str | None = None
+    competitor_mentions: list[str] = Field(default_factory=list)
 
 
 class ContentBriefOut(BaseModel):
@@ -47,6 +50,7 @@ class AuditSummaryOut(BaseModel):
     stage: str
     progress_percent: int
     visibility_score: float | None
+    target_mention_rate: float | None = None
     created_at: str
 
 
@@ -56,6 +60,7 @@ class AuditDetailOut(AuditSummaryOut):
     competitor_scores: list[CompetitorScoreOut]
     prompts: list[PromptRowOut]
     recommendations: list[RecommendationOut]
+    crawl_summary: dict = Field(default_factory=dict)
     error_message: str | None = None
 
 

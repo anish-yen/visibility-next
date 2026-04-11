@@ -21,9 +21,11 @@ class AuditState:
     stage: str
     progress_percent: int
     visibility_score: float | None
+    target_mention_rate: float | None
     competitor_scores: list[dict[str, Any]]
     prompts: list[dict[str, Any]]
     recommendations: list[dict[str, Any]]
+    crawl_summary: dict[str, Any]
     created_at: str
     error_message: str | None = None
 
@@ -61,9 +63,11 @@ def create_audit(
         stage="crawling",
         progress_percent=5,
         visibility_score=None,
+        target_mention_rate=None,
         competitor_scores=[],
         prompts=[],
         recommendations=[],
+        crawl_summary={},
         created_at=_iso(),
     )
     _audits[aid] = state
@@ -107,9 +111,11 @@ def complete_audit(
     audit_id: str,
     *,
     visibility_score: float,
+    target_mention_rate: float,
     competitor_scores: list[dict[str, Any]],
     prompts: list[dict[str, Any]],
     recommendations: list[dict[str, Any]],
+    crawl_summary: dict[str, Any],
 ) -> None:
     a = _audits.get(audit_id)
     if not a:
@@ -118,9 +124,11 @@ def complete_audit(
     a.stage = "completed"
     a.progress_percent = 100
     a.visibility_score = visibility_score
+    a.target_mention_rate = target_mention_rate
     a.competitor_scores = competitor_scores
     a.prompts = prompts
     a.recommendations = recommendations
+    a.crawl_summary = crawl_summary
 
 
 def attach_brief(audit_id: str, recommendation_id: str, brief: dict[str, Any]) -> bool:
