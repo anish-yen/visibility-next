@@ -26,6 +26,10 @@ function stageIndex(stage: string): number {
   return i < 0 ? 0 : i;
 }
 
+function formatBucketLabel(bucket: string): string {
+  return bucket.replace(/_/g, " ");
+}
+
 export function DashboardFlow() {
   const [sessionChecked, setSessionChecked] = useState(false);
   const [bootError, setBootError] = useState<string | null>(null);
@@ -215,6 +219,12 @@ export function DashboardFlow() {
   }
 
   const selectedRec = sortedRecs.find((r) => r.id === selectedRecId);
+  const weakBucketChips = useMemo(() => {
+    if (!detail?.weak_prompt_buckets) return [];
+    return Object.entries(detail.weak_prompt_buckets)
+      .sort((a, b) => a[1] - b[1])
+      .slice(0, 3);
+  }, [detail]);
 
   async function cancelNewAudit() {
     setWantsNewAudit(false);
@@ -457,17 +467,41 @@ export function DashboardFlow() {
             </div>
 
             <section className="rounded-2xl border border-slate-800 bg-slate-900/40 p-8">
-              <p className="text-sm font-medium text-slate-400">Visibility score</p>
-              <p className="mt-2 text-5xl font-semibold tracking-tight text-white">
-                {detail.visibility_score != null
-                  ? Math.round(detail.visibility_score)
-                  : "—"}
-                <span className="text-2xl text-slate-500">/100</span>
-              </p>
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <p className="text-sm font-medium text-slate-400">
+                    Simulated visibility score
+                  </p>
+                  <p className="mt-2 text-5xl font-semibold tracking-tight text-white">
+                    {detail.visibility_score != null
+                      ? Math.round(detail.visibility_score)
+                      : "—"}
+                    <span className="text-2xl text-slate-500">/100</span>
+                  </p>
+                </div>
+                {weakBucketChips.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {weakBucketChips.map(([bucket, value]) => (
+                      <span
+                        key={bucket}
+                        className="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1 text-xs text-slate-300"
+                      >
+                        Weak {formatBucketLabel(bucket)} · {value.toFixed(2)}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
               <p className="mt-2 max-w-xl text-sm text-slate-500">
                 Directional estimate from simulated evaluation — not a live ChatGPT
                 or Perplexity measurement.
               </p>
+              {detail.score_components?.bucket_scores ? (
+                <p className="mt-3 text-xs text-slate-500">
+                  Built from prompt-level mention strength, competitor presence,
+                  intent fit, and bucket-level performance.
+                </p>
+              ) : null}
             </section>
 
             <section className="rounded-2xl border border-slate-800 bg-slate-900/40 p-8">
@@ -485,13 +519,14 @@ export function DashboardFlow() {
             <section className="rounded-2xl border border-slate-800 bg-slate-900/40 p-8">
               <h3 className="text-lg font-semibold text-white">Prompts</h3>
               <p className="mt-1 text-sm text-slate-500">
-                Whether your brand was mentioned in the simulated answer
+                Buyer-style prompts and whether your brand appeared in the simulated answer
               </p>
               <div className="mt-4 overflow-x-auto">
                 <table className="w-full text-left text-sm">
                   <thead>
                     <tr className="border-b border-slate-800 text-slate-400">
                       <th className="pb-3 pr-4 font-medium">Prompt</th>
+                      <th className="pb-3 pr-4 font-medium">Type</th>
                       <th className="pb-3 pr-4 font-medium">Mentioned</th>
                       <th className="pb-3 font-medium">Score</th>
                     </tr>
@@ -499,7 +534,21 @@ export function DashboardFlow() {
                   <tbody className="text-slate-300">
                     {detail.prompts.map((p) => (
                       <tr key={p.id} className="border-b border-slate-800/80">
-                        <td className="py-3 pr-4 align-top">{p.text}</td>
+                        <td className="py-3 pr-4 align-top">
+                          <div className="max-w-xl leading-relaxed text-slate-200">
+                            {p.text}
+                          </div>
+                          {p.explanation ? (
+                            <div className="mt-1 text-xs text-slate-500">
+                              {p.explanation}
+                            </div>
+                          ) : null}
+                        </td>
+                        <td className="py-3 pr-4 align-top">
+                          <span className="rounded-full border border-slate-700 bg-slate-950/50 px-2.5 py-1 text-xs text-slate-300 capitalize">
+                            {formatBucketLabel(p.intent || "general")}
+                          </span>
+                        </td>
                         <td className="py-3 pr-4">
                           <span
                             className={
@@ -509,8 +558,10 @@ export function DashboardFlow() {
                             {p.mentioned ? "Yes" : "No"}
                           </span>
                         </td>
-                        <td className="py-3 tabular-nums text-slate-400">
-                          {p.score.toFixed(2)}
+                        <td className="py-3 tabular-nums">
+                          <span className="font-medium text-slate-200">
+                            {p.score.toFixed(2)}
+                          </span>
                         </td>
                       </tr>
                     ))}
@@ -537,10 +588,29 @@ export function DashboardFlow() {
                             : "border-slate-800 bg-slate-950/40 text-slate-300 hover:border-slate-600"
                         }`}
                       >
-                        <span className="font-medium">{r.title}</span>
-                        <span className="mt-1 block text-xs text-slate-500">
-                          Priority {r.priority_score.toFixed(2)}
+                        <div className="flex items-start justify-between gap-3">
+                          <span className="font-medium">{r.title}</span>
+                          <span className="rounded-full border border-slate-700 px-2 py-0.5 text-[11px] text-slate-400">
+                            Priority {r.priority_score.toFixed(2)}
+                          </span>
+                        </div>
+                        <span className="mt-2 block text-xs leading-relaxed text-slate-400">
+                          {r.rationale}
                         </span>
+                        {r.recommendation_evidence?.weak_prompt_buckets ? (
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {Object.entries(r.recommendation_evidence.weak_prompt_buckets)
+                              .slice(0, 2)
+                              .map(([bucket, value]) => (
+                                <span
+                                  key={bucket}
+                                  className="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[11px] text-slate-400"
+                                >
+                                  {formatBucketLabel(bucket)} {value.toFixed(2)}
+                                </span>
+                              ))}
+                          </div>
+                        ) : null}
                       </button>
                     </li>
                   ))}
@@ -562,9 +632,30 @@ export function DashboardFlow() {
                     <h4 className="text-base font-semibold text-indigo-200">
                       {selectedRec.brief.title}
                     </h4>
-                    <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-slate-300">
+                    <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4">
+                      {selectedRec.recommendation_evidence?.example_prompts?.length ? (
+                        <div className="mb-4">
+                          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                            Prompt evidence
+                          </p>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            {selectedRec.recommendation_evidence.example_prompts
+                              .slice(0, 2)
+                              .map((prompt) => (
+                                <span
+                                  key={prompt}
+                                  className="rounded-full border border-slate-700 bg-slate-900/70 px-3 py-1 text-xs text-slate-300"
+                                >
+                                  {prompt}
+                                </span>
+                              ))}
+                          </div>
+                        </div>
+                      ) : null}
+                      <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-slate-300">
                       {selectedRec.brief.body}
-                    </pre>
+                      </pre>
+                    </div>
                   </article>
                 ) : (
                   <p className="mt-4 text-sm text-slate-500">Loading…</p>

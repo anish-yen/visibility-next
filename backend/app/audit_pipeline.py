@@ -212,6 +212,15 @@ def _extract_category_phrase(distilled: dict[str, Any], brand: str) -> str:
 
 
 def _extract_target_customer(distilled: dict[str, Any]) -> str:
+    normalized_category = str(distilled.get("normalized_category", "")).lower()
+    if normalized_category == "knowledge management":
+        return "knowledge workers"
+    if normalized_category == "team collaboration software":
+        return "collaborative teams"
+    if normalized_category == "project management software":
+        return "project teams"
+    if normalized_category == "productivity tool":
+        return "knowledge workers"
     for candidate in distilled.get("normalized_use_cases", []):
         lowered = candidate.lower()
         if "marketplace" in lowered:
@@ -242,7 +251,7 @@ def _extract_target_customer(distilled: dict[str, Any]) -> str:
 def _extract_use_case_phrases(distilled: dict[str, Any]) -> list[str]:
     normalized = [item.strip().lower() for item in distilled.get("normalized_use_cases", []) if item.strip()]
     if normalized:
-        return normalized[:4]
+        return normalized[:2]
 
     candidates = distilled.get("use_cases", []) + distilled.get("keywords", [])
     phrases: list[str] = []
@@ -262,7 +271,7 @@ def _extract_use_case_phrases(distilled: dict[str, Any]) -> list[str]:
         if phrase not in seen:
             seen.add(phrase)
             unique.append(phrase)
-    return unique[:4]
+    return unique[:2]
 
 
 def _extract_trust_theme(distilled: dict[str, Any]) -> str:
@@ -291,6 +300,14 @@ def _category_query_label(category: str) -> str:
         return "payment platform"
     if lowered == "financial infrastructure for businesses":
         return "payments platform"
+    if lowered == "knowledge management":
+        return "knowledge management software"
+    if lowered == "team collaboration software":
+        return "collaboration software"
+    if lowered == "project management software":
+        return "project management software"
+    if lowered == "productivity tool":
+        return "productivity software"
     return lowered
 
 
@@ -304,21 +321,21 @@ def _fallback_prompt_specs(
     trust_theme: str,
 ) -> list[tuple[str, str]]:
     primary_use_case = use_cases[0] if use_cases else category
-    secondary_use_case = use_cases[1] if len(use_cases) > 1 else "subscriptions"
+    secondary_use_case = use_cases[1] if len(use_cases) > 1 else customer
     query_category = _category_query_label(category)
     return [
-        ("informational", f"best {query_category} for {customer}"),
-        ("informational", f"is {brand} good for {primary_use_case}"),
+        ("informational", f"best {query_category}"),
+        ("informational", f"best {query_category} for {primary_use_case}"),
         ("comparative", f"{brand} vs {competitor} for {primary_use_case}"),
-        ("comparative", f"{brand} alternatives for {customer}"),
+        ("comparative", f"{competitor} alternatives for {query_category}"),
         ("transactional", f"{query_category} with transparent pricing"),
-        ("transactional", f"best {query_category} for startups with {secondary_use_case}"),
-        ("trust", f"is {brand} trusted for {primary_use_case}"),
+        ("transactional", f"easiest {query_category} to set up"),
+        ("trust", f"is {brand} good for {primary_use_case}"),
         ("trust", f"{query_category} with strong {trust_theme}"),
-        ("transactional", f"{brand} pricing for {customer}"),
+        ("transactional", f"{brand} pricing"),
         ("informational", f"best platform for {primary_use_case}"),
-        ("transactional", f"{query_category} easiest to implement"),
-        ("informational", f"{competitor} competitors for {primary_use_case}"),
+        ("transactional", f"{query_category} for {customer}"),
+        ("informational", f"{competitor} competitors for {query_category}"),
         ("transactional", f"{query_category} with easy onboarding"),
         ("use_case", f"{query_category} for {primary_use_case}"),
         ("use_case", f"{brand} for {secondary_use_case}"),

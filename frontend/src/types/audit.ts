@@ -19,6 +19,8 @@ export type PromptRow = {
   text: string;
   mentioned: boolean;
   score: number;
+  intent?: string | null;
+  explanation?: string | null;
 };
 
 export type ContentBrief = {
@@ -31,6 +33,13 @@ export type Recommendation = {
   title: string;
   rationale: string;
   priority_score: number;
+  recommendation_evidence?: {
+    weak_prompt_buckets?: Record<string, number>;
+    page_coverage?: Record<string, boolean | number | string>;
+    example_prompts?: string[];
+    competitor?: string;
+    distilled_category?: string;
+  };
   brief: ContentBrief | null;
 };
 
@@ -40,5 +49,14 @@ export type AuditDetail = AuditSummary & {
   competitor_scores: CompetitorScore[];
   prompts: PromptRow[];
   recommendations: Recommendation[];
+  weak_prompt_buckets?: Record<string, number>;
+  score_components?: {
+    average_prompt_score?: number;
+    target_mention_rate?: number;
+    weighted_bucket_score?: number;
+    bucket_scores?: Record<string, number>;
+    bucket_counts?: Record<string, number>;
+  };
+  crawl_summary?: Record<string, unknown>;
   error_message: string | null;
 };

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import deque
+from collections import Counter, deque
 from html import unescape
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -81,6 +81,10 @@ CATEGORY_HINTS: list[tuple[tuple[str, ...], str]] = [
     (("ecommerce platform", "online store", "sell online", "online business"), "ecommerce platform"),
     (("commerce platform", "commerce"), "ecommerce platform"),
     (("financial infrastructure",), "financial infrastructure for businesses"),
+    (("knowledge base", "knowledge management", "docs", "notes", "wiki"), "knowledge management"),
+    (("team collaboration", "collaboration", "collaborative workspace", "workspace"), "team collaboration software"),
+    (("productivity", "organize work", "organize your work", "organize projects"), "productivity tool"),
+    (("project management", "tasks", "task management", "project planning"), "project management software"),
 ]
 
 USE_CASE_HINTS: list[tuple[tuple[str, ...], str]] = [
@@ -89,7 +93,41 @@ USE_CASE_HINTS: list[tuple[tuple[str, ...], str]] = [
     (("ecommerce", "online store", "checkout"), "ecommerce payments"),
     (("api", "developer"), "payments APIs"),
     (("invoice", "invoic"), "invoicing"),
+    (("notes", "docs", "wiki"), "documentation and notes"),
+    (("project", "tasks", "planning"), "project planning"),
+    (("collaboration", "workspace"), "team collaboration"),
 ]
+
+GENERIC_CATEGORY_TOKENS = {
+    "platform",
+    "software",
+    "tool",
+    "tools",
+    "workspace",
+    "management",
+    "collaboration",
+    "productivity",
+    "commerce",
+    "payments",
+    "billing",
+    "knowledge",
+    "project",
+}
+
+NARROW_PHRASE_PATTERNS = (
+    "night shift",
+    "next big thing",
+)
+
+NARROW_PHRASE_VERBS = {
+    "meet",
+    "make",
+    "build",
+    "grow",
+    "run",
+    "start",
+    "power",
+}
 
 
 def normalize_domain(raw: str) -> str:
@@ -204,6 +242,58 @@ def _normalize_use_case_label(text: str) -> str:
         if any(keyword in lowered for keyword in keywords):
             return label
     return ""
+
+
+def _looks_like_narrow_phrase(text: str) -> bool:
+    lowered = _normalize_fragment(text)
+    if not lowered:
+        return True
+    if any(pattern in lowered for pattern in NARROW_PHRASE_PATTERNS):
+        return True
+    words = lowered.split()
+    if words and words[0] in NARROW_PHRASE_VERBS:
+        return True
+    if len(words) >= 3 and not any(word in GENERIC_CATEGORY_TOKENS for word in words):
+        return True
+    return False
+
+
+def _source_weight(page_type: str, source_kind: str) -> int:
+    weight = {
+        "title": 4,
+        "meta": 4,
+        "heading": 3,
+        "body": 1,
+    }.get(source_kind, 1)
+    if page_type == "homepage":
+        weight += 2
+    if page_type in {"pricing", "docs", "about"}:
+        weight += 1
+    return weight
+
+
+def _choose_broad_category(
+    category_scores: Counter[str],
+    all_fragments: list[str],
+    fallback: str,
+) -> str:
+    for label, score in category_scores.most_common():
+        if score >= 2:
+            return label
+    concept_scores: Counter[str] = Counter()
+    for fragment in all_fragments:
+        lowered = _normalize_fragment(fragment)
+        if "knowledge" in lowered or "wiki" in lowered or "docs" in lowered or "notes" in lowered:
+            concept_scores["knowledge management"] += 1
+        if "collaboration" in lowered or "workspace" in lowered or "team" in lowered:
+            concept_scores["team collaboration software"] += 1
+        if "productivity" in lowered or "organize" in lowered:
+            concept_scores["productivity tool"] += 1
+        if "project" in lowered or "task" in lowered or "planning" in lowered:
+            concept_scores["project management software"] += 1
+    if concept_scores:
+        return concept_scores.most_common(1)[0][0]
+    return fallback
 
 
 def _looks_like_boilerplate(text: str) -> bool:
@@ -412,20 +502,36 @@ def distill_site_context(site: dict[str, Any]) -> dict[str, Any]:
     use_cases = _dedupe_fragments(use_cases, min_chars=6)[:6]
     trust_signals = _dedupe_fragments(trust_signals, min_chars=6)[:5]
 
-    normalized_categories: list[str] = []
-    normalized_use_cases: list[str] = []
-    for fragment in all_fragments:
-        category_label = _normalize_category_label(fragment)
-        if category_label:
-            normalized_categories.append(category_label)
-        use_case_label = _normalize_use_case_label(fragment)
+    category_scores: Counter[str] = Counter()
+    use_case_scores: Counter[str] = Counter()
+    source_fragments: list[tuple[str, str, str]] = []
+    for page in pages[:6]:
+        if page.get("title"):
+            source_fragments.append((page.get("page_type", "general"), "title", page["title"]))
+        if page.get("meta_description"):
+            source_fragments.append((page.get("page_type", "general"), "meta", page["meta_description"]))
+        for heading in page.get("headings", [])[:4]:
+            source_fragments.append((page.get("page_type", "general"), "heading", heading))
+        for fragment in _split_sentences(page.get("content_text", ""))[:6]:
+            source_fragments.append((page.get("page_type", "general"), "body", fragment))
+
+    for page_type, source_kind, fragment in source_fragments:
+        cleaned_fragment = _strip_promo_phrases(fragment)
+        if not cleaned_fragment:
+            continue
+        weight = _source_weight(page_type, source_kind)
+        category_label = _normalize_category_label(cleaned_fragment)
+        if category_label and not _looks_like_narrow_phrase(cleaned_fragment):
+            category_scores[category_label] += weight
+        use_case_label = _normalize_use_case_label(cleaned_fragment)
         if use_case_label:
-            normalized_use_cases.append(use_case_label)
+            use_case_scores[use_case_label] += weight
 
-    normalized_categories = _dedupe_fragments(normalized_categories, min_chars=6)
-    normalized_use_cases = _dedupe_fragments(normalized_use_cases, min_chars=4)
+    normalized_categories = [label for label, _ in category_scores.most_common(4)]
+    normalized_use_cases = [label for label, score in use_case_scores.most_common(6) if score >= 2]
 
-    product_category = normalized_categories[0] if normalized_categories else _normalize_category_label(category) or category[:120]
+    fallback_category = _normalize_category_label(category) or category[:120]
+    product_category = _choose_broad_category(category_scores, all_fragments, fallback_category)
     normalized_trust = "customer proof"
     for candidate in trust_signals:
         lowered = candidate.lower()
@@ -449,7 +555,7 @@ def distill_site_context(site: dict[str, Any]) -> dict[str, Any]:
         "normalized_category": product_category,
         "audiences": audiences,
         "use_cases": use_cases,
-        "normalized_use_cases": normalized_use_cases,
+        "normalized_use_cases": normalized_use_cases[:3],
         "trust_signals": trust_signals,
         "normalized_trust": normalized_trust,
         "keywords": keywords,
