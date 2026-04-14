@@ -46,11 +46,24 @@ NAVIGATION_TERMS = {
 }
 
 PROMO_PHRASES = (
+    "be the next big thing",
+    "next big thing",
     "to grow your revenue",
     "grow your revenue",
     "grow faster",
     "accelerate new business opportunities",
     "new business opportunities",
+    "powering businesses of all sizes",
+    "powering businesses",
+    "powering entrepreneurs",
+    "powering brands",
+    "powering commerce",
+    "dream big",
+    "sell more",
+    "build your brand",
+    "start your business",
+    "start, run, and grow",
+    "run and grow",
     "for businesses of all sizes",
     "for businesses",
     "for modern businesses",
@@ -65,6 +78,8 @@ CATEGORY_HINTS: list[tuple[tuple[str, ...], str]] = [
     (("subscription billing", "subscriptions", "billing"), "billing and subscriptions"),
     (("checkout", "online payments"), "online payments"),
     (("marketplace payments", "marketplace"), "marketplace payments"),
+    (("ecommerce platform", "online store", "sell online", "online business"), "ecommerce platform"),
+    (("commerce platform", "commerce"), "ecommerce platform"),
     (("financial infrastructure",), "financial infrastructure for businesses"),
 ]
 
@@ -139,24 +154,49 @@ def _strip_promo_phrases(text: str) -> str:
     cleaned = text
     for phrase in PROMO_PHRASES:
         cleaned = re.sub(rf"\b{re.escape(phrase)}\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\b(best|leading|powerful|next big|big|future[- ]ready|fastest|easiest)\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\b(be|build|grow|start|scale|powering)\b", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.-|:")
     return cleaned
 
 
+def _looks_like_marketing_phrase(text: str) -> bool:
+    lowered = _normalize_fragment(text)
+    if not lowered:
+        return True
+    if any(phrase in lowered for phrase in PROMO_PHRASES):
+        return True
+    if any(phrase in lowered for phrase in ("be the next big thing", "next big thing", "grow your revenue", "powering businesses", "powering commerce")):
+        return True
+    if re.search(r"\b(be|build|grow|start|scale)\b .* \bthing\b", lowered):
+        return True
+    if re.search(r"\b(powering|helping)\b .* \b(all sizes|everywhere)\b", lowered):
+        return True
+    return False
+
+
 def _normalize_category_label(text: str) -> str:
+    if _looks_like_marketing_phrase(text):
+        text = _strip_promo_phrases(text)
     lowered = _normalize_fragment(_strip_promo_phrases(text))
     if not lowered:
         return ""
     for keywords, label in CATEGORY_HINTS:
         if any(keyword in lowered for keyword in keywords):
             return label
+    lowered = re.sub(r"\bfor businesses\b", "", lowered).strip()
+    lowered = re.sub(r"\bof all sizes\b", "", lowered).strip()
     words = lowered.split()
-    if 2 <= len(words) <= 5:
+    if any(word in words for word in ("thing", "powering", "revenue", "businesses")) and len(words) > 2:
+        return ""
+    if 2 <= len(words) <= 4:
         return " ".join(words)
     return ""
 
 
 def _normalize_use_case_label(text: str) -> str:
+    if _looks_like_marketing_phrase(text):
+        text = _strip_promo_phrases(text)
     lowered = _normalize_fragment(_strip_promo_phrases(text))
     if not lowered:
         return ""
@@ -176,6 +216,8 @@ def _looks_like_boilerplate(text: str) -> bool:
     if len(set(words)) <= 2 and len(words) > 5:
         return True
     if "|" in text and len(text) > 60:
+        return True
+    if _looks_like_marketing_phrase(text):
         return True
     if any(phrase in lowered for phrase in ("grow your revenue", "new business opportunities")):
         return True

@@ -48,6 +48,14 @@ NAV_TERMS = {
     "contact sales",
 }
 
+BANNED_MARKETING_PROMPT_PATTERNS = (
+    "next big thing",
+    "be the next big thing",
+    "powering",
+    "grow your revenue",
+    "new business opportunities",
+)
+
 
 def _brand_label(domain: str) -> str:
     part = domain.split(".")[0]
@@ -73,6 +81,25 @@ def _summarize_prompt_weaknesses(prompts: list[dict[str, Any]]) -> dict[str, flo
         intent: round(sum(scores) / len(scores), 3)
         for intent, scores in summary.items()
         if scores
+    }
+
+
+def _bucket_average_scores(prompts: list[dict[str, Any]]) -> dict[str, float]:
+    buckets: dict[str, list[float]] = {}
+    for prompt in prompts:
+        bucket = _coverage_bucket(prompt)
+        buckets.setdefault(bucket, []).append(float(prompt.get("score", 0.0)))
+    return {
+        bucket: round(sum(values) / len(values), 3)
+        for bucket, values in buckets.items()
+        if values
+    }
+
+
+def _bucket_counts(prompts: list[dict[str, Any]]) -> dict[str, int]:
+    return {
+        bucket: sum(1 for prompt in prompts if _coverage_bucket(prompt) == bucket)
+        for bucket in PROMPT_BUCKETS
     }
 
 
@@ -116,6 +143,10 @@ def _prompt_looks_polluted(text: str, blocked_fragments: list[str]) -> bool:
     if any(term in normalized for term in NAV_TERMS) and len(normalized.split()) <= 12:
         return True
     if _has_repeated_phrase(text):
+        return True
+    if any(pattern in normalized for pattern in BANNED_MARKETING_PROMPT_PATTERNS):
+        return True
+    if "for businesses" in normalized and len(normalized.split()) <= 6:
         return True
     if sum(text.count(ch) for ch in "|/<>") >= 2:
         return True
@@ -329,6 +360,56 @@ def _coverage_bucket(prompt: dict[str, Any]) -> str:
     if any(term in text for term in ("marketplace", "subscriptions", "billing", "checkout", "ecommerce", "saas")):
         return "use_case"
     return "informational"
+
+
+def _intent_alignment_score(prompt: dict[str, Any], target_site: dict[str, Any]) -> float:
+    bucket = _coverage_bucket(prompt)
+    page_support = {
+        "comparative": 1.0 if _page_type_present(target_site, "comparison") else 0.35,
+        "pricing": 1.0 if _page_type_present(target_site, "pricing") else 0.35,
+        "trust": 1.0 if _page_type_present(target_site, "reviews") else 0.4,
+        "implementation": 1.0 if _page_type_present(target_site, "docs") else 0.4,
+        "use_case": 1.0 if any(_page_type_present(target_site, page_type) for page_type in ("blog", "docs", "general")) else 0.55,
+        "informational": 0.85 if _page_type_present(target_site, "homepage") else 0.5,
+    }
+    return page_support.get(bucket, 0.6)
+
+
+def _compute_prompt_score(
+    *,
+    target_role: str,
+    competitor_role: str,
+    fit_score: float,
+    prompt: dict[str, Any],
+    target_site: dict[str, Any],
+    competitor_mentions: list[str],
+) -> tuple[float, dict[str, float]]:
+    mention_prominence = {"absent": 0.0, "supporting": 0.65, "central": 1.0}.get(target_role, 0.0)
+    competitor_penalty = {"none": 0.0, "supporting": 0.12, "strong": 0.24}.get(competitor_role, 0.0)
+    competitor_penalty += min(0.08, max(0, len(competitor_mentions) - 1) * 0.04)
+    intent_alignment = _intent_alignment_score(prompt, target_site)
+    answer_fit = fit_score
+
+    raw_score = (
+        (mention_prominence * 0.45)
+        + (answer_fit * 0.3)
+        + (intent_alignment * 0.2)
+        - competitor_penalty
+    )
+
+    if target_role == "central":
+        raw_score += 0.08
+    elif target_role == "absent":
+        raw_score = 0.0
+
+    bounded = round(max(0.0, min(1.0, raw_score)), 2)
+    components = {
+        "mention_prominence": round(mention_prominence, 2),
+        "fit_to_prompt": round(answer_fit, 2),
+        "intent_alignment": round(intent_alignment, 2),
+        "competitor_penalty": round(competitor_penalty, 2),
+    }
+    return bounded, components
 
 
 def _ensure_prompt_coverage(
@@ -624,21 +705,14 @@ Competitor context:
     if not isinstance(competitor_mentions, list):
         competitor_mentions = []
 
-    score = 0.0
-    if target_role == "central":
-        score = 0.82 + (fit_score * 0.16)
-        if competitor_role == "strong":
-            score -= 0.14
-        elif competitor_role == "supporting":
-            score -= 0.06
-    elif target_role == "supporting":
-        score = 0.48 + (fit_score * 0.24)
-        if competitor_role == "strong":
-            score -= 0.12
-        elif competitor_role == "supporting":
-            score -= 0.04
-
-    mention_strength = round(max(0.0, min(1.0, score)), 2)
+    mention_strength, score_components = _compute_prompt_score(
+        target_role=target_role,
+        competitor_role=competitor_role,
+        fit_score=fit_score,
+        prompt=prompt,
+        target_site=target_site,
+        competitor_mentions=[str(item).strip() for item in competitor_mentions if str(item).strip()],
+    )
     target_mentioned = target_role != "absent"
 
     return {
@@ -649,6 +723,11 @@ Competitor context:
         "score": round(mention_strength, 2),
         "explanation": str(data.get("explanation", "")).strip() or "No explanation returned.",
         "competitor_mentions": [str(item).strip() for item in competitor_mentions if str(item).strip()],
+        "score_components": {
+            **score_components,
+            "target_role": target_role,
+            "competitor_role": competitor_role,
+        },
         "answer": str(data.get("answer", "")).strip(),
     }
 
@@ -697,19 +776,33 @@ def _fallback_evaluation(
         fit_bonus += 0.05
 
     strength += fit_bonus
-    if competitor_mentions:
-        strength -= min(0.1, 0.04 * len(competitor_mentions))
     strength = round(max(0.0, min(1.0, strength)), 2)
 
     mentioned = strength > 0
+    target_role = "central" if strength >= 0.78 else "supporting" if strength >= 0.4 else "absent"
+    competitor_role = "strong" if len(competitor_mentions) >= 2 else "supporting" if competitor_mentions else "none"
+    computed_score, score_components = _compute_prompt_score(
+        target_role=target_role,
+        competitor_role=competitor_role,
+        fit_score=strength,
+        prompt=prompt,
+        target_site=target_site,
+        competitor_mentions=competitor_mentions,
+    )
+
     return {
         "id": prompt["id"],
         "text": prompt["text"],
         "intent": prompt.get("intent"),
-        "mentioned": mentioned,
-        "score": round(strength, 2),
+        "mentioned": computed_score > 0,
+        "score": computed_score,
         "explanation": "Fallback heuristic based on page-type coverage, prompt intent, and competitor presence.",
         "competitor_mentions": competitor_mentions,
+        "score_components": {
+            **score_components,
+            "target_role": target_role,
+            "competitor_role": competitor_role,
+        },
         "answer": "",
     }
 
@@ -719,14 +812,39 @@ def _build_competitor_scores(
     prompts: list[dict[str, Any]],
     target_site: dict[str, Any],
     competitor_sites: list[dict[str, Any]],
-) -> tuple[float, list[dict[str, Any]], float]:
+) -> tuple[float, list[dict[str, Any]], float, dict[str, Any]]:
     total_prompts = max(len(prompts), 1)
     target_total = sum(float(prompt.get("score", 0.0)) for prompt in prompts)
     target_mention_rate = round(
         _safe_ratio(sum(1 for prompt in prompts if prompt.get("mentioned")), total_prompts),
         2,
     )
-    overall_score = round(_safe_ratio(target_total, total_prompts) * 100, 1)
+    bucket_scores = _bucket_average_scores(prompts)
+    score_components = {
+        "average_prompt_score": round(_safe_ratio(target_total, total_prompts), 3),
+        "target_mention_rate": target_mention_rate,
+        "bucket_scores": bucket_scores,
+        "bucket_counts": _bucket_counts(prompts),
+    }
+
+    weighted_bucket_score = (
+        (bucket_scores.get("comparative", 0.0) * 0.22)
+        + (bucket_scores.get("pricing", 0.0) * 0.18)
+        + (bucket_scores.get("trust", 0.0) * 0.18)
+        + (bucket_scores.get("implementation", 0.0) * 0.14)
+        + (bucket_scores.get("use_case", 0.0) * 0.14)
+        + (bucket_scores.get("informational", 0.0) * 0.14)
+    )
+    score_components["weighted_bucket_score"] = round(weighted_bucket_score, 3)
+    overall_score = round(
+        (
+            (score_components["average_prompt_score"] * 0.55)
+            + (target_mention_rate * 0.2)
+            + (weighted_bucket_score * 0.25)
+        )
+        * 100,
+        1,
+    )
 
     scores = [
         {
@@ -766,7 +884,163 @@ def _build_competitor_scores(
             }
         )
 
-    return overall_score, scores, target_mention_rate
+    return overall_score, scores, target_mention_rate, score_components
+
+
+def _brief_type_for_recommendation(recommendation: dict[str, Any]) -> str:
+    title = recommendation.get("title", "").lower()
+    if "faq" in title or "objection" in title:
+        return "faq"
+    if "comparison" in title:
+        return "comparison"
+    if "homepage" in title or "positioning" in title:
+        return "homepage"
+    if "pricing" in title:
+        return "pricing"
+    if "trust" in title or "proof" in title or "evidence" in title:
+        return "trust"
+    if "implementation" in title or "onboarding" in title or "docs" in title:
+        return "implementation"
+    return "use_case"
+
+
+def _format_rationale(
+    *,
+    bucket_name: str,
+    bucket_score: float,
+    page_coverage_note: str,
+    evidence_note: str | None = None,
+) -> str:
+    rationale = f"{bucket_name.title()} prompts are weak ({bucket_score:.2f})"
+    if page_coverage_note:
+        rationale += f"; {page_coverage_note}"
+    if evidence_note:
+        rationale += f"; {evidence_note}"
+    return rationale + "."
+
+
+def _fallback_brief_body(
+    *,
+    audit: audit_store.AuditState,
+    recommendation: dict[str, Any],
+    weakest_prompts: list[dict[str, Any]],
+) -> str:
+    brief_type = _brief_type_for_recommendation(recommendation)
+    evidence = recommendation.get("recommendation_evidence", {})
+    weak_lines = "\n".join(f"- {prompt['text']}" for prompt in weakest_prompts)
+    evidence_lines = "\n".join(
+        f"- {key}: {value}"
+        for key, value in [
+            ("Weak buckets", evidence.get("weak_prompt_buckets")),
+            ("Page coverage", evidence.get("page_coverage")),
+            ("Example prompts", evidence.get("example_prompts")),
+        ]
+        if value
+    )
+    if brief_type == "comparison":
+        return (
+            f"## Objective\n\n"
+            f"Create a comparison page that helps buyers evaluate `{audit.primary_domain}` against named alternatives and understand best-fit scenarios.\n\n"
+            f"## Why now\n\n"
+            f"{recommendation['rationale']}\n\n"
+            f"## Evidence\n\n{evidence_lines or '- Comparison prompts underperformed.'}\n\n"
+            f"## Prompt evidence\n\n{weak_lines}\n\n"
+            f"## Recommended sections\n\n"
+            f"1. Who this comparison is for and what they are evaluating.\n"
+            f"2. Direct comparison table: pricing model, implementation effort, support, and fit.\n"
+            f"3. Where `{audit.primary_domain}` wins, where competitors win, and honest tradeoffs.\n"
+            f"4. Customer proof, migration confidence, and trust signals.\n"
+            f"5. CTA for demo, trial, or sales-assisted evaluation.\n"
+        )
+    if brief_type == "faq":
+        return (
+            f"## Objective\n\n"
+            f"Publish an FAQ/objections page that answers the buying questions blocking visibility for `{audit.primary_domain}`.\n\n"
+            f"## Why now\n\n"
+            f"{recommendation['rationale']}\n\n"
+            f"## Evidence\n\n{evidence_lines or '- Informational/objection prompts underperformed.'}\n\n"
+            f"## Prompt evidence\n\n{weak_lines}\n\n"
+            f"## Recommended sections\n\n"
+            f"1. Top objections with short, direct answers.\n"
+            f"2. Buying questions on pricing, migration, contracts, and integrations.\n"
+            f"3. Trust questions on security, support, and reliability.\n"
+            f"4. Internal links to deeper docs, pricing, and implementation pages.\n"
+            f"5. CTA for self-serve next step or sales contact.\n"
+        )
+    if brief_type == "homepage":
+        return (
+            f"## Objective\n\n"
+            f"Sharpen homepage positioning so buyers and AI-generated answers can identify the offer, buyer, and use case faster.\n\n"
+            f"## Why now\n\n"
+            f"{recommendation['rationale']}\n\n"
+            f"## Evidence\n\n{evidence_lines or '- Homepage/informational positioning is weak.'}\n\n"
+            f"## Prompt evidence\n\n{weak_lines}\n\n"
+            f"## Recommended sections\n\n"
+            f"1. Hero with a clear category label and ideal buyer.\n"
+            f"2. Primary use cases immediately below the hero.\n"
+            f"3. Proof, customer logos, or quantified outcomes near the top of page.\n"
+            f"4. Fast paths to pricing, docs, and comparison content.\n"
+            f"5. CTA aligned to evaluation stage rather than generic brand copy.\n"
+        )
+    if brief_type == "implementation":
+        return (
+            f"## Objective\n\n"
+            f"Create onboarding and implementation content that reduces perceived setup risk for `{audit.primary_domain}`.\n\n"
+            f"## Why now\n\n"
+            f"{recommendation['rationale']}\n\n"
+            f"## Evidence\n\n{evidence_lines or '- Implementation/onboarding prompts underperformed.'}\n\n"
+            f"## Prompt evidence\n\n{weak_lines}\n\n"
+            f"## Recommended sections\n\n"
+            f"1. Setup overview, required inputs, and time-to-value timeline.\n"
+            f"2. Integration paths, APIs, and common implementation patterns.\n"
+            f"3. Migration plan or onboarding checklist.\n"
+            f"4. Support model, docs, and escalation paths.\n"
+            f"5. CTA for implementation consultation or docs start point.\n"
+        )
+    if brief_type == "pricing":
+        return (
+            f"## Objective\n\n"
+            f"Improve pricing clarity so evaluators can understand fit, packaging, and tradeoffs without friction.\n\n"
+            f"## Why now\n\n"
+            f"{recommendation['rationale']}\n\n"
+            f"## Evidence\n\n{evidence_lines or '- Pricing prompts underperformed.'}\n\n"
+            f"## Prompt evidence\n\n{weak_lines}\n\n"
+            f"## Recommended sections\n\n"
+            f"1. Pricing overview with packaging model and cost drivers.\n"
+            f"2. Example scenarios by buyer type, volume, or use case.\n"
+            f"3. FAQ on fees, limits, discounts, and contract questions.\n"
+            f"4. Links to implementation, support, and comparison content.\n"
+            f"5. CTA to calculate fit or talk to sales.\n"
+        )
+    if brief_type == "trust":
+        return (
+            f"## Objective\n\n"
+            f"Create trust and proof content that makes `{audit.primary_domain}` feel safer and more credible during evaluation.\n\n"
+            f"## Why now\n\n"
+            f"{recommendation['rationale']}\n\n"
+            f"## Evidence\n\n{evidence_lines or '- Trust/proof prompts underperformed.'}\n\n"
+            f"## Prompt evidence\n\n{weak_lines}\n\n"
+            f"## Recommended sections\n\n"
+            f"1. Customer proof and quantified outcomes.\n"
+            f"2. Security, compliance, and reliability assurances.\n"
+            f"3. Testimonials, case studies, or review excerpts.\n"
+            f"4. Why buyers trust the platform for critical workflows.\n"
+            f"5. CTA to review proof, talk to sales, or start a trial.\n"
+        )
+    return (
+        f"## Objective\n\n"
+        f"Build a focused page around one of the weak buyer-intent themes surfaced in the audit.\n\n"
+        f"## Why now\n\n"
+        f"{recommendation['rationale']}\n\n"
+        f"## Evidence\n\n{evidence_lines or '- Use-case prompts underperformed.'}\n\n"
+        f"## Prompt evidence\n\n{weak_lines}\n\n"
+        f"## Recommended sections\n\n"
+        f"1. Clear target use case and who it is for.\n"
+        f"2. Workflow detail, implementation notes, and fit criteria.\n"
+        f"3. Proof and differentiation for that use case.\n"
+        f"4. FAQ/objections specific to the workflow.\n"
+        f"5. CTA for the next evaluation step.\n"
+    )
 
 
 def _generate_recommendations(
@@ -776,6 +1050,7 @@ def _generate_recommendations(
     prompts: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     weaknesses = _summarize_prompt_weaknesses(prompts)
+    weak_prompt_buckets = _bucket_average_scores(prompts)
     target_distilled = distill_site_context(target_site)
     competitor_labels = [site.get("label") or _brand_label(site.get("domain", "")) for site in competitor_sites if site.get("domain")]
     primary_competitor = competitor_labels[0] if competitor_labels else "key competitors"
@@ -787,13 +1062,14 @@ def _generate_recommendations(
     implementation_weak = any(_coverage_bucket(prompt) == "implementation" and prompt.get("score", 0.0) < 0.65 for prompt in prompts)
     recommendations: list[dict[str, Any]] = []
 
-    def add_recommendation(title: str, rationale: str, priority_score: float) -> None:
+    def add_recommendation(title: str, rationale: str, priority_score: float, recommendation_evidence: dict[str, Any]) -> None:
         recommendations.append(
             {
                 "id": f"rec-{state.id[:8]}-{len(recommendations)}",
                 "title": title,
                 "rationale": rationale,
                 "priority_score": round(priority_score, 2),
+                "recommendation_evidence": recommendation_evidence,
                 "brief": None,
             }
         )
@@ -801,35 +1077,87 @@ def _generate_recommendations(
     if not _page_type_present(target_site, "faq"):
         add_recommendation(
             "Build a buyer FAQ and objections page",
-            "The crawl did not find an FAQ/help page, and weaker informational prompts suggest buyers are not getting direct answers to evaluation questions.",
+            _format_rationale(
+                bucket_name="informational",
+                bucket_score=weak_prompt_buckets.get("informational", 0.0),
+                page_coverage_note="no FAQ/help page was found",
+                evidence_note="buyers likely are not getting direct answers to evaluation questions",
+            ),
             0.93 if weaknesses.get("informational", 1.0) < 0.55 else 0.79,
+            {
+                "weak_prompt_buckets": {"informational": weak_prompt_buckets.get("informational", 0.0)},
+                "page_coverage": {"faq": False},
+                "example_prompts": [p["text"] for p in weak_prompts if _coverage_bucket(p) == "informational"][:3],
+            },
         )
     if not _page_type_present(target_site, "comparison") or comparison_weak:
         competitor_has_comparison = any(_page_type_present(site, "comparison") for site in competitor_sites)
         add_recommendation(
             f"Strengthen comparison coverage against {primary_competitor}",
-            f"Comparison-style prompts underperform, including queries like: {weak_prompt_text}. "
-            + ("Competitors already appear to have comparison content. " if competitor_has_comparison else "")
-            + "The target site needs clearer alternative/comparison pages for buyers evaluating options.",
+            _format_rationale(
+                bucket_name="comparative",
+                bucket_score=weak_prompt_buckets.get("comparative", 0.0),
+                page_coverage_note="target comparison coverage is missing or thin",
+                evidence_note=("competitors already show comparison coverage" if competitor_has_comparison else f"buyers are comparing against {primary_competitor}"),
+            ),
             0.96 if weaknesses.get("comparative", 1.0) < 0.6 else 0.84,
+            {
+                "weak_prompt_buckets": {"comparative": weak_prompt_buckets.get("comparative", 0.0)},
+                "page_coverage": {
+                    "target_comparison_page": _page_type_present(target_site, "comparison"),
+                    "competitor_comparison_pages": competitor_has_comparison,
+                },
+                "competitor": primary_competitor,
+                "example_prompts": [p["text"] for p in weak_prompts if _coverage_bucket(p) == "comparative"][:3],
+            },
         )
     if not _page_type_present(target_site, "pricing") or pricing_weak:
         add_recommendation(
             "Clarify pricing and packaging for evaluators",
-            "Pricing-oriented prompts are weak, and the crawl suggests buyers may not be getting enough clarity on plans, costs, or fit before contacting sales.",
+            _format_rationale(
+                bucket_name="pricing",
+                bucket_score=weak_prompt_buckets.get("pricing", 0.0),
+                page_coverage_note=("pricing content is missing" if not _page_type_present(target_site, "pricing") else "pricing content is not answering evaluator questions clearly enough"),
+                evidence_note="buyers may not be getting enough clarity on plans, costs, or fit",
+            ),
             0.9 if weaknesses.get("transactional", 1.0) < 0.62 else 0.78,
+            {
+                "weak_prompt_buckets": {"pricing": weak_prompt_buckets.get("pricing", 0.0)},
+                "page_coverage": {"pricing": _page_type_present(target_site, "pricing")},
+                "example_prompts": [p["text"] for p in weak_prompts if _coverage_bucket(p) == "pricing"][:3],
+            },
         )
     if not _page_type_present(target_site, "reviews") or trust_weak:
         add_recommendation(
             "Expand trust content with proof and customer evidence",
-            "Trust and review-oriented prompts are underperforming, which usually means the site needs stronger proof points such as case studies, testimonials, security/compliance detail, or customer outcomes.",
+            _format_rationale(
+                bucket_name="trust",
+                bucket_score=weak_prompt_buckets.get("trust", 0.0),
+                page_coverage_note=("review/proof content is missing" if not _page_type_present(target_site, "reviews") else "existing proof content is not strong enough"),
+                evidence_note="case studies, testimonials, or compliance detail are likely underrepresented",
+            ),
             0.88 if weaknesses.get("trust", 1.0) < 0.62 else 0.75,
+            {
+                "weak_prompt_buckets": {"trust": weak_prompt_buckets.get("trust", 0.0)},
+                "page_coverage": {"reviews": _page_type_present(target_site, "reviews")},
+                "example_prompts": [p["text"] for p in weak_prompts if _coverage_bucket(p) == "trust"][:3],
+            },
         )
     if implementation_weak and not _page_type_present(target_site, "docs"):
         add_recommendation(
             "Add onboarding and implementation content",
-            "Implementation-style prompts are weak and the crawl found limited docs/help content, making it harder for buyers to picture setup effort and integrations.",
+            _format_rationale(
+                bucket_name="implementation",
+                bucket_score=weak_prompt_buckets.get("implementation", 0.0),
+                page_coverage_note="docs/help coverage is limited",
+                evidence_note="buyers may be unsure about setup effort, integrations, or migration",
+            ),
             0.83,
+            {
+                "weak_prompt_buckets": {"implementation": weak_prompt_buckets.get("implementation", 0.0)},
+                "page_coverage": {"docs": _page_type_present(target_site, "docs")},
+                "example_prompts": [p["text"] for p in weak_prompts if _coverage_bucket(p) == "implementation"][:3],
+            },
         )
 
     homepage = next((page for page in target_site.get("pages", []) if page.get("page_type") == "homepage"), None)
@@ -849,15 +1177,35 @@ def _generate_recommendations(
     if weak_homepage or weaknesses.get("informational", 1.0) < 0.6:
         add_recommendation(
             "Strengthen homepage positioning",
-            f"The homepage crawl suggests the primary offer, category, or buyer is not stated clearly enough. Distilled category signal currently looks like: {target_distilled.get('product_category') or target_distilled.get('category') or 'unclear'}.",
+            _format_rationale(
+                bucket_name="informational",
+                bucket_score=weak_prompt_buckets.get("informational", 0.0),
+                page_coverage_note="homepage positioning is not stating the offer or buyer clearly enough",
+                evidence_note=f"current category signal is {target_distilled.get('product_category') or target_distilled.get('category') or 'unclear'}",
+            ),
             0.84,
+            {
+                "weak_prompt_buckets": {"informational": weak_prompt_buckets.get("informational", 0.0)},
+                "page_coverage": {"homepage": _page_type_present(target_site, "homepage")},
+                "distilled_category": target_distilled.get("product_category") or target_distilled.get("category"),
+            },
         )
 
     if not recommendations:
         add_recommendation(
             "Expand use-case landing pages around highest-intent workflows",
-            "Core page types exist, but the next gain is deeper use-case content tied to the buyer workflows showing only moderate simulated visibility.",
+            _format_rationale(
+                bucket_name="use-case",
+                bucket_score=weak_prompt_buckets.get("use_case", 0.0),
+                page_coverage_note="core page types exist but workflow-specific pages are still thin",
+                evidence_note="moderate visibility suggests deeper use-case coverage could unlock more mentions",
+            ),
             0.68,
+            {
+                "weak_prompt_buckets": weak_prompt_buckets,
+                "page_coverage": target_site.get("page_type_counts", {}),
+                "example_prompts": [p["text"] for p in weak_prompts[:3]],
+            },
         )
 
     recommendations.sort(key=lambda rec: rec["priority_score"], reverse=True)
@@ -870,9 +1218,11 @@ async def generate_content_brief(
 ) -> dict[str, str]:
     client = GeminiClient()
     weaknesses = _summarize_prompt_weaknesses(audit.prompts)
+    weak_bucket_scores = _bucket_average_scores(audit.prompts)
     weakest_prompts = sorted(audit.prompts, key=lambda prompt: prompt.get("score", 0.0))[:5]
     crawl_summary = json.dumps(audit.crawl_summary, indent=2)
     weak_prompt_text = "\n".join(f"- {prompt['text']} ({prompt.get('intent', 'n/a')})" for prompt in weakest_prompts)
+    brief_type = _brief_type_for_recommendation(recommendation)
 
     system_instruction = (
         "You create structured, readable content briefs for SEO and AI-answer visibility work. "
@@ -892,6 +1242,8 @@ Industry: {audit.industry or "Unknown"}
 Recommendation title: {recommendation['title']}
 Recommendation rationale: {recommendation['rationale']}
 Weakness summary by intent: {weaknesses}
+Weak bucket scores: {weak_bucket_scores}
+Recommendation type: {brief_type}
 Lowest-scoring prompts:
 {weak_prompt_text}
 
@@ -912,19 +1264,10 @@ Crawl summary:
         pass
 
     title = f"Brief: {recommendation['title']}"
-    body = (
-        f"## Objective\n\n"
-        f"Improve simulated visibility for `{audit.primary_domain}` by shipping content aligned to **{recommendation['title'].lower()}**.\n\n"
-        f"## Why this matters\n\n"
-        f"{recommendation['rationale']}\n\n"
-        f"## Weak prompt themes\n\n"
-        + "\n".join(f"- {prompt['text']}" for prompt in weakest_prompts)
-        + "\n\n## Suggested sections\n\n"
-        f"1. Clear positioning for the buyer and use case.\n"
-        f"2. Comparison or evaluation criteria buyers actually ask about.\n"
-        f"3. Evidence: proof points, testimonials, or outcomes.\n"
-        f"4. FAQs that answer objections.\n"
-        f"5. CTA to start a demo, trial, or contact flow.\n"
+    body = _fallback_brief_body(
+        audit=audit,
+        recommendation=recommendation,
+        weakest_prompts=weakest_prompts,
     )
     return {"title": title, "body": body}
 
@@ -982,7 +1325,7 @@ async def run_audit(audit_id: str) -> None:
             prompt_results.append(result)
 
         audit_store.update_progress(audit_id, stage="analyzing", progress_percent=86)
-        visibility_score, competitor_scores, target_mention_rate = _build_competitor_scores(
+        visibility_score, competitor_scores, target_mention_rate, score_components = _build_competitor_scores(
             state,
             prompt_results,
             target_site,
@@ -1014,11 +1357,10 @@ async def run_audit(audit_id: str) -> None:
                 for site in normalized_competitors
             ],
             "prompt_intent_scores": _summarize_prompt_weaknesses(prompt_results),
+            "weak_prompt_buckets": _bucket_average_scores(prompt_results),
             "prompt_count": len(prompt_results),
-            "prompt_bucket_counts": {
-                bucket: sum(1 for prompt in prompt_results if _coverage_bucket(prompt) == bucket)
-                for bucket in PROMPT_BUCKETS
-            },
+            "prompt_bucket_counts": _bucket_counts(prompt_results),
+            "score_components": score_components,
             "evaluation_note": "Directional simulated estimate grounded in crawled pages and Gemini-generated answers.",
         }
 

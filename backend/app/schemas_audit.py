@@ -28,6 +28,7 @@ class PromptRowOut(BaseModel):
     intent: str | None = None
     explanation: str | None = None
     competitor_mentions: list[str] = Field(default_factory=list)
+    score_components: dict = Field(default_factory=dict)
 
 
 class ContentBriefOut(BaseModel):
@@ -40,6 +41,7 @@ class RecommendationOut(BaseModel):
     title: str
     rationale: str
     priority_score: float
+    recommendation_evidence: dict = Field(default_factory=dict)
     brief: ContentBriefOut | None = None
 
 
@@ -61,6 +63,8 @@ class AuditDetailOut(AuditSummaryOut):
     prompts: list[PromptRowOut]
     recommendations: list[RecommendationOut]
     crawl_summary: dict = Field(default_factory=dict)
+    weak_prompt_buckets: dict = Field(default_factory=dict)
+    score_components: dict = Field(default_factory=dict)
     error_message: str | None = None
 
 

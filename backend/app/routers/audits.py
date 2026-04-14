@@ -45,11 +45,14 @@ def _to_detail(a: audit_store.AuditState) -> AuditDetailOut:
                 title=r["title"],
                 rationale=r["rationale"],
                 priority_score=r["priority_score"],
+                recommendation_evidence=r.get("recommendation_evidence", {}),
                 brief=ContentBriefOut(**r["brief"]) if r.get("brief") else None,
             )
             for r in a.recommendations
         ],
         crawl_summary=a.crawl_summary,
+        weak_prompt_buckets=a.crawl_summary.get("weak_prompt_buckets", {}),
+        score_components=a.crawl_summary.get("score_components", {}),
         error_message=a.error_message,
     )
 
