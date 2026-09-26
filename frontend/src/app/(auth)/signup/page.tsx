@@ -22,7 +22,7 @@ export default function SignupPage() {
     const supabase = createClient();
     const origin =
       typeof window !== "undefined" ? window.location.origin : "";
-    const { error: signUpError } = await supabase.auth.signUp({
+    const { data, error: signUpError } = await supabase.auth.signUp({
       email,
       password,
       options: {
@@ -32,6 +32,12 @@ export default function SignupPage() {
     setLoading(false);
     if (signUpError) {
       setError(signUpError.message);
+      return;
+    }
+    if (data.session) {
+      // Email confirmation is disabled: the user is already signed in.
+      router.push("/");
+      router.refresh();
       return;
     }
     setMessage(
