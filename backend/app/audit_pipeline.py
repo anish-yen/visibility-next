@@ -741,6 +741,50 @@ Competitor distilled context:
     return cleaned[:PROMPT_TARGET_MAX]
 
 
+def _brand_variants(label: str, domain: str, site: dict[str, Any]) -> list[str]:
+    variants: set[str] = set()
+    for raw in (label, domain):
+        cleaned = str(raw or "").strip().lower()
+        if not cleaned:
+            continue
+        variants.add(cleaned)
+        root = cleaned.split(".")[0].replace("-", " ").strip()
+        if len(root) >= 3 and " " not in root:
+            variants.add(root)
+    pages = site.get("pages", []) if isinstance(site, dict) else []
+    homepage = next(
+        (page for page in pages if page.get("page_type") == "homepage"),
+        pages[0] if pages else {},
+    ) or {}
+    title = str(homepage.get("title", "")).strip().lower()
+    if title:
+        brand_part = title
+        for sep in ("|", " - ", " : ", ":"):
+            if sep in brand_part:
+                brand_part = brand_part.split(sep)[0].strip()
+                break
+        if 3 <= len(brand_part) <= 25 and " " not in brand_part:
+            variants.add(brand_part)
+        first_word = brand_part.split()[0] if brand_part.split() else ""
+        if len(first_word) >= 4:
+            variants.add(first_word)
+    return sorted(variant for variant in variants if len(variant) >= 3)
+
+
+def _find_brand(lowered: str, variant: str) -> int:
+    start = 0
+    while True:
+        idx = lowered.find(variant, start)
+        if idx < 0:
+            return -1
+        before = lowered[idx - 1] if idx > 0 else " "
+        after_idx = idx + len(variant)
+        after = lowered[after_idx] if after_idx < len(lowered) else " "
+        if not before.isalpha() and not after.isalpha():
+            return idx
+        start = idx + 1
+
+
 async def _evaluate_prompt(
     *,
     prompt: dict[str, Any],
@@ -767,51 +811,32 @@ async def _evaluate_prompt(
         temperature=0.4,
     )
 
-    grade_system = (
-        "You grade brand visibility in an AI assistant's answer. Return strict JSON only."
-    )
-    grade_user = f"""
-Buyer question:
-{prompt['text']}
+    lowered = answer.lower()
+    target_variants = _brand_variants(target_label, target_site.get("domain", ""), target_site)
+    target_pos = -1
+    for variant in target_variants:
+        pos = _find_brand(lowered, variant)
+        if pos >= 0 and (target_pos < 0 or pos < target_pos):
+            target_pos = pos
 
-AI assistant's answer:
-\"\"\"{answer}\"\"\"
+    competitor_positions: dict[str, int] = {}
+    for site in competitor_sites:
+        if not site.get("domain"):
+            continue
+        label = site.get("label") or _brand_label(site.get("domain", ""))
+        for variant in _brand_variants(label, site.get("domain", ""), site):
+            pos = _find_brand(lowered, variant)
+            if pos >= 0 and (label not in competitor_positions or pos < competitor_positions[label]):
+                competitor_positions[label] = pos
 
-Target brand: {target_label} (website: {target_site.get('domain', '')})
-Competitor brands: {competitor_labels}
+    competitor_mentions = sorted(competitor_positions, key=competitor_positions.get)
 
-Return JSON exactly like:
-{{
-  "target_mentioned": true,
-  "target_prominence": "first|later|absent",
-  "competitor_mentions": ["Brand A"],
-  "explanation": "one sentence"
-}}
-
-Rules:
-- Count mentions of the target under any name or alias (brand name, website name, or common shorthand).
-- "target_prominence" is "first" if the target is the first brand the answer recommends, "later" if it appears after other brands, "absent" if it is not mentioned.
-- "competitor_mentions" lists only brands from the competitor list that appear in the answer.
-- Judge only the answer text, never outside knowledge about these companies.
-"""
-    data = await client.generate_json(
-        system_instruction=grade_system,
-        user_prompt=grade_user,
-        temperature=0.0,
-    )
-
-    target_mentioned = bool(data.get("target_mentioned"))
-    prominence = str(data.get("target_prominence", "absent")).strip().lower()
-    if prominence not in {"first", "later", "absent"}:
-        prominence = "later" if target_mentioned else "absent"
-    if not target_mentioned:
-        prominence = "absent"
-    target_role = {"first": "central", "later": "supporting", "absent": "absent"}[prominence]
-
-    competitor_mentions_raw = data.get("competitor_mentions", [])
-    if not isinstance(competitor_mentions_raw, list):
-        competitor_mentions_raw = []
-    competitor_mentions = [str(item).strip() for item in competitor_mentions_raw if str(item).strip()]
+    if target_pos < 0:
+        target_role = "absent"
+    elif not competitor_positions or target_pos <= min(competitor_positions.values()):
+        target_role = "central"
+    else:
+        target_role = "supporting"
 
     if not competitor_mentions:
         competitor_role = "none"
@@ -833,17 +858,15 @@ Rules:
         competitor_mentions=competitor_mentions,
     )
 
-    grader_note = str(data.get("explanation", "")).strip()
     prominence_label = {
-        "central": "mentioned first",
-        "supporting": "mentioned",
+        "central": "mentioned first among tracked brands",
+        "supporting": "mentioned after other brands",
         "absent": "not mentioned",
     }[target_role]
-    explanation = f"Real Gemini answer graded: target {prominence_label}"
+    explanation = f"Real Gemini answer: target {prominence_label}"
     if competitor_mentions:
         explanation += f"; competitors mentioned: {', '.join(competitor_mentions)}"
-    if grader_note:
-        explanation += f". {grader_note}"
+    explanation += "."
 
     return {
         "id": prompt["id"],
@@ -1490,7 +1513,7 @@ async def run_audit(audit_id: str) -> None:
                 result = _fallback_evaluation(prompt, target_site, normalized_competitors)
                 fallback_evaluations += 1
             prompt_results.append(result)
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(4.0)
 
         audit_store.update_progress(audit_id, stage="analyzing", progress_percent=86)
         visibility_score, competitor_scores, target_mention_rate, score_components = _build_competitor_scores(
