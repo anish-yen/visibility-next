@@ -16,7 +16,7 @@ export default async function Home() {
     <main className="min-h-screen bg-slate-950 px-6 py-16 text-slate-100">
       <div className="mx-auto max-w-2xl space-y-8">
         <p className="text-sm font-medium text-indigo-400">
-          AI Search Visibility Auditor
+          Zeteum
         </p>
         <h1 className="text-3xl font-semibold tracking-tight">
           Measure how you show up in AI-style answers
