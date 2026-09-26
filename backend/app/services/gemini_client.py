@@ -77,7 +77,9 @@ class GeminiClient:
                 )
                 response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise GeminiError(f"Gemini request failed: {exc}") from exc
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            detail = f"HTTP {status}" if status is not None else type(exc).__name__
+            raise GeminiError(f"Gemini request failed: {detail}") from exc
 
         try:
             data = response.json()

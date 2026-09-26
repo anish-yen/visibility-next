@@ -125,7 +125,7 @@ export function DashboardFlow() {
 
     async function tick() {
       try {
-        const d = await getAudit(activeAuditId);
+        const d = await getAudit(activeAuditId!);
         setDetail(d);
         if (d.status === "completed") {
           setView("dashboard");
@@ -147,7 +147,7 @@ export function DashboardFlow() {
     let cancelled = false;
     (async () => {
       try {
-        const d = await getAudit(activeAuditId);
+        const d = await getAudit(activeAuditId!);
         if (!cancelled) setDetail(d);
       } catch {
         /* ignore */

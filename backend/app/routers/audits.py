@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
-from app import audit_pipeline, audit_store
+from app import audit_pipeline, audit_store, cycle_store, loop_runner
 from app.schemas_audit import (
     AuditCreateBody,
     AuditDetailOut,
     AuditSummaryOut,
     BriefResponse,
     CompetitorScoreOut,
+    CycleSummaryOut,
     ContentBriefOut,
     PromptRowOut,
     RecommendationOut,
@@ -125,3 +126,53 @@ async def generate_brief(
     brief = await audit_pipeline.generate_content_brief(a, rec)
     audit_store.attach_brief(audit_id, recommendation_id, brief)
     return BriefResponse(recommendation_id=recommendation_id, brief=ContentBriefOut(**brief))
+
+
+def _owned_audit(request: Request, audit_id: str) -> audit_store.AuditState:
+    a = audit_store.get(audit_id)
+    if not a:
+        raise HTTPException(status_code=404, detail="Audit not found")
+    _require_owner(request, a)
+    return a
+
+
+def _cycle_summary(s: dict) -> CycleSummaryOut:
+    return CycleSummaryOut(
+        snapshot_id=s.get("snapshot_id"),
+        cycle_number=s.get("cycle_number", 0),
+        mention_rate=s.get("mention_rate"),
+        lift=s.get("lift"),
+        decision=s.get("decision"),
+        decision_reason=s.get("decision_reason"),
+        created_at=s.get("created_at"),
+    )
+
+
+@router.post("/audits/{audit_id}/cycle", status_code=202)
+async def run_cycle_endpoint(
+    request: Request, audit_id: str, background_tasks: BackgroundTasks
+) -> dict:
+    """Kick off one agentic-loop cycle in the background."""
+    _owned_audit(request, audit_id)
+    background_tasks.add_task(
+        loop_runner.run_cycle, audit_id, cycle_store.get_cycle_store()
+    )
+    return {"status": "running", "audit_id": audit_id}
+
+
+@router.get("/audits/{audit_id}/cycles", response_model=list[CycleSummaryOut])
+async def list_cycles(request: Request, audit_id: str) -> list[CycleSummaryOut]:
+    """Cycle history for the frontend, newest first."""
+    _owned_audit(request, audit_id)
+    snapshots = await cycle_store.get_cycle_store().list(audit_id)
+    return [_cycle_summary(s) for s in snapshots]
+
+
+@router.get("/audits/{audit_id}/cycles/{cycle_number}")
+async def get_cycle(request: Request, audit_id: str, cycle_number: int) -> dict:
+    """One full cycle snapshot (prompt results, citation map, artifacts)."""
+    _owned_audit(request, audit_id)
+    snapshot = await cycle_store.get_cycle_store().get(audit_id, cycle_number)
+    if not snapshot:
+        raise HTTPException(status_code=404, detail="Cycle not found")
+    return snapshot

@@ -71,3 +71,13 @@ class AuditDetailOut(AuditSummaryOut):
 class BriefResponse(BaseModel):
     recommendation_id: str
     brief: ContentBriefOut
+
+
+class CycleSummaryOut(BaseModel):
+    snapshot_id: str | None = None
+    cycle_number: int
+    mention_rate: float | None = None
+    lift: float | None = None
+    decision: str | None = None
+    decision_reason: str | None = None
+    created_at: str | None = None

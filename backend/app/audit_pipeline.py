@@ -1325,19 +1325,27 @@ async def run_audit(audit_id: str) -> None:
         audit_store.update_progress(audit_id, stage="generating_prompts", progress_percent=38)
         try:
             prompts = await _generate_prompts_with_gemini(state, target_site, normalized_competitors)
-        except GeminiError:
+        except GeminiError as exc:
+            print(f"GEMINI prompt generation failed, using fallback prompts: {exc}", flush=True)
             prompts = _fallback_prompts(state, target_site, normalized_competitors)
 
         audit_store.update_progress(audit_id, stage="evaluating", progress_percent=64)
         prompt_results: list[dict[str, Any]] = []
         for prompt in prompts:
-            try:
-                result = await _evaluate_prompt(
-                    prompt=prompt,
-                    target_site=target_site,
-                    competitor_sites=normalized_competitors,
-                )
-            except GeminiError:
+            result = None
+            for attempt in range(3):
+                try:
+                    result = await _evaluate_prompt(
+                        prompt=prompt,
+                        target_site=target_site,
+                        competitor_sites=normalized_competitors,
+                    )
+                    break
+                except GeminiError as exc:
+                    print(f"GEMINI evaluation failed (attempt {attempt + 1}/3): {exc}", flush=True)
+                    if attempt < 2:
+                        await asyncio.sleep(25)
+            if result is None:
                 result = _fallback_evaluation(prompt, target_site, normalized_competitors)
             prompt_results.append(result)
 

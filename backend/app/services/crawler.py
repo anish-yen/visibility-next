@@ -347,7 +347,7 @@ async def _can_fetch(base_url: str, target_url: str) -> bool:
         if response.status_code >= 400:
             return True
         parser.parse(response.text.splitlines())
-        return parser.can_fetch("*", target_url)
+        return parser.can_fetch("VisibilityAuditor", target_url)
     except Exception:
         return True
 
