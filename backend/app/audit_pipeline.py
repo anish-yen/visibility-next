@@ -669,19 +669,22 @@ async def _generate_prompts_with_gemini(
     )
 
     system_instruction = (
-        "You write realistic buyer questions for an AI visibility audit. Return JSON only. "
-        "Every prompt must be a natural question a real buyer would type into an AI assistant "
-        "while researching this kind of product: conversational, specific, and grounded in what "
-        "the company actually sells. "
-        "Good examples of the register: \"How do I get ChatGPT to recommend my SaaS product to buyers?\", "
-        "\"What is the best AI visibility tool for a B2B startup?\", "
-        "\"Profound vs Peec: which one tracks ChatGPT mentions better?\", "
+        "You write buyer questions the way a real person actually types into an AI assistant, "
+        "logged out with no context: casual, direct, lowercase is fine, sometimes a bare search "
+        "phrase, sometimes a full question. The buyer is hunting for a tool or brand to solve "
+        "their use case but usually has NOT named a brand yet. Return JSON only. "
+        "Real examples of this register, actually typed by a human into ChatGPT: "
+        "\"service that audits whether chatgpt mentions your product\", "
         "\"alternatives to Profound for ai visibility\", "
         "\"how do i get my startup cited by ai chatbots\", "
-        "\"service that audits whether chatgpt mentions your product\". "
-        "Casual lowercase search-style queries are just as good as polished questions. "
+        "\"What is the best AI visibility tool for a B2B startup?\", "
+        "\"Profound vs Peec: which one tracks ChatGPT mentions better?\", "
+        "\"How do I get ChatGPT to recommend my SaaS product to buyers?\". "
+        "Vary length across the set: mix short 4-8 word fragments with full questions, and never "
+        "use the same opening shape twice. "
         "Bad prompts are telegraphic template fragments like \"Acme for project planning\" or "
         "\"best platform for payments apis\" - never write those. "
+        "Ground every prompt in what the company actually sells from the crawl evidence. "
         "Do not paste source text, titles, menus, taglines, or paragraphs from the website. "
         "Do not include explanations or any text outside the JSON object. "
         "Return strict JSON only."
@@ -695,7 +698,8 @@ Requirements:
 - Keep each prompt under {MAX_PROMPT_CHARS} characters.
 - Use the real brand/category language from the crawl, but do not copy long source text.
 - Cover these areas across the full set: informational, comparative, pricing, trust/reviews, implementation/onboarding, and use-case queries.
-- Mix branded and unbranded questions: some name the company or the competitor directly, many are brand-agnostic buyer questions whose best answer would mention them.
+- Mostly unbranded: at most 2 prompts in the set may name the company or a competitor. Every other prompt must name NO brand at all - a brand-agnostic buyer question whose best answer would naturally mention them.
+- Vary length and shape: mix short fragments and full questions; no repeated openings like "how do i" more than twice.
 - BANNED shapes: "<Brand> for <use case>", "best platform for <use case>", "is <Brand> good for <use case>", or any prompt that reads like filled template slots.
 - Avoid placeholders like "your market", "your product", or generic filler.
 - Avoid raw nav/menu text such as "Products Solutions Developers Resources Pricing".
@@ -738,6 +742,14 @@ Competitor distilled context:
     )
     if len(cleaned) < PROMPT_TARGET_MIN:
         raise GeminiError("Prompt generation returned too few usable prompts")
+    variants = _brand_variants(
+        target_site.get("label") or _brand_label(target_site.get("domain", "")),
+        target_site.get("domain", ""),
+        target_site,
+    )
+    for prompt in cleaned[:PROMPT_TARGET_MAX]:
+        lowered = str(prompt.get("text", "")).lower()
+        prompt["names_brand"] = any(_find_brand(lowered, v) >= 0 for v in variants)
     return cleaned[:PROMPT_TARGET_MAX]
 
 
@@ -873,6 +885,7 @@ async def _evaluate_prompt(
         "text": prompt["text"],
         "intent": prompt.get("intent"),
         "mentioned": target_role != "absent",
+        "names_brand": bool(prompt.get("names_brand")),
         "score": round(mention_strength, 2),
         "explanation": explanation,
         "competitor_mentions": competitor_mentions,
@@ -949,6 +962,7 @@ def _fallback_evaluation(
         "text": prompt["text"],
         "intent": prompt.get("intent"),
         "mentioned": computed_score > 0,
+        "names_brand": bool(prompt.get("names_brand")),
         "score": computed_score,
         "explanation": "Fallback heuristic based on page-type coverage, prompt intent, and competitor presence.",
         "competitor_mentions": competitor_mentions,
@@ -968,27 +982,53 @@ def _build_competitor_scores(
     target_site: dict[str, Any],
     competitor_sites: list[dict[str, Any]],
 ) -> tuple[float, list[dict[str, Any]], float, dict[str, Any]]:
-    total_prompts = max(len(prompts), 1)
-    target_total = sum(float(prompt.get("score", 0.0)) for prompt in prompts)
+    unbranded = [p for p in prompts if not p.get("names_brand")]
+    branded = [p for p in prompts if p.get("names_brand")]
+    headline = unbranded if unbranded else prompts
+    score_scope = "unbranded" if unbranded else "all_prompts_fallback"
+    total_prompts = max(len(headline), 1)
+    target_total = sum(float(prompt.get("score", 0.0)) for prompt in headline)
     target_mention_rate = round(
-        _safe_ratio(sum(1 for prompt in prompts if prompt.get("mentioned")), total_prompts),
+        _safe_ratio(sum(1 for prompt in headline if prompt.get("mentioned")), total_prompts),
         2,
     )
-    bucket_scores = _bucket_average_scores(prompts)
+    bucket_scores = _bucket_average_scores(headline)
     score_components = {
+        "score_scope": score_scope,
         "average_prompt_score": round(_safe_ratio(target_total, total_prompts), 3),
         "target_mention_rate": target_mention_rate,
         "bucket_scores": bucket_scores,
-        "bucket_counts": _bucket_counts(prompts),
+        "bucket_counts": _bucket_counts(headline),
+        "unbranded": {
+            "prompt_count": len(unbranded),
+            "mention_rate": round(_safe_ratio(sum(1 for p in unbranded if p.get("mentioned")), max(len(unbranded), 1)), 2),
+            "average_prompt_score": round(_safe_ratio(sum(float(p.get("score", 0.0)) for p in unbranded), max(len(unbranded), 1)), 3),
+        },
+        "branded": {
+            "prompt_count": len(branded),
+            "mention_rate": round(_safe_ratio(sum(1 for p in branded if p.get("mentioned")), max(len(branded), 1)), 2),
+            "average_prompt_score": round(_safe_ratio(sum(float(p.get("score", 0.0)) for p in branded), max(len(branded), 1)), 3),
+        },
+        "all_prompts": {
+            "prompt_count": len(prompts),
+            "mention_rate": round(_safe_ratio(sum(1 for p in prompts if p.get("mentioned")), max(len(prompts), 1)), 2),
+            "average_prompt_score": round(_safe_ratio(sum(float(p.get("score", 0.0)) for p in prompts), max(len(prompts), 1)), 3),
+        },
     }
 
+    bucket_weights = {
+        "comparative": 0.22,
+        "pricing": 0.18,
+        "trust": 0.18,
+        "implementation": 0.14,
+        "use_case": 0.14,
+        "informational": 0.14,
+    }
+    present_weight = sum(w for b, w in bucket_weights.items() if b in bucket_scores)
     weighted_bucket_score = (
-        (bucket_scores.get("comparative", 0.0) * 0.22)
-        + (bucket_scores.get("pricing", 0.0) * 0.18)
-        + (bucket_scores.get("trust", 0.0) * 0.18)
-        + (bucket_scores.get("implementation", 0.0) * 0.14)
-        + (bucket_scores.get("use_case", 0.0) * 0.14)
-        + (bucket_scores.get("informational", 0.0) * 0.14)
+        sum(bucket_scores[b] * w for b, w in bucket_weights.items() if b in bucket_scores) / present_weight
+        if present_weight
+        else 0.0
     )
     score_components["weighted_bucket_score"] = round(weighted_bucket_score, 3)
     overall_score = round(
@@ -1557,7 +1597,7 @@ async def run_audit(audit_id: str) -> None:
             "fallback_evaluations": fallback_evaluations,
             "degraded": prompts_source == "fallback" or fallback_evaluations > 0,
             "evaluation_note": (
-                "Visibility measured from real Gemini answers to each buyer prompt, graded for brand mentions. Not a live ChatGPT or Perplexity measurement."
+                "Visibility measured from real Gemini answers to each buyer prompt, graded for brand mentions. Headline score uses only prompts that do not name your brand; branded prompts are reported separately. Not a live ChatGPT or Perplexity measurement."
                 if prompts_source == "gemini" and fallback_evaluations == 0
                 else "Degraded: some results used heuristic estimation because the AI engine was unavailable."
             ),
