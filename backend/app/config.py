@@ -22,4 +22,9 @@ class Settings:
         self.redis_url = os.environ.get("REDIS_URL", "")
         self.anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         self.gemini_api_key = os.environ.get("GEMINI_API_KEY", "")
+        self.gemini_api_keys = [
+            key.strip()
+            for key in os.environ.get("GEMINI_API_KEYS", "").split(",")
+            if key.strip()
+        ]
         self.gemini_model = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
