@@ -5,7 +5,7 @@ from app.middleware import SupabaseJWTAuthMiddleware
 from app.routers import audits
 
 app = FastAPI(
-    title="AI Search Visibility Auditor API",
+    title="Zeteum API",
     description="Backend for crawl, prompts, and visibility evaluation.",
     version="0.1.0",
 )
