@@ -44,9 +44,46 @@ def _strip_json_fence(text: str) -> str:
 class GeminiClient:
     def __init__(self) -> None:
         settings = get_settings()
-        self.api_key = settings.gemini_api_key
+        keys = getattr(settings, "gemini_api_keys", None) or []
+        if not keys and settings.gemini_api_key:
+            keys = [settings.gemini_api_key]
+        self.api_keys = list(keys)
+        self.api_key = self.api_keys[0] if self.api_keys else ""
         self.model = settings.gemini_model
         self.base_url = "https://generativelanguage.googleapis.com/v1beta/models"
+
+    async def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if not self.api_keys:
+            raise GeminiError("GEMINI_API_KEY is not configured")
+
+        url = f"{self.base_url}/{self.model}:generateContent"
+        last_exc: GeminiError | None = None
+        for index, key in enumerate(self.api_keys):
+            try:
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    response = await client.post(
+                        url,
+                        params={"key": key},
+                        json=payload,
+                    )
+                    response.raise_for_status()
+            except httpx.HTTPError as exc:
+                status = getattr(getattr(exc, "response", None), "status_code", None)
+                detail = f"HTTP {status}" if status is not None else type(exc).__name__
+                last_exc = GeminiError(f"Gemini request failed: {detail}")
+                if status == 429 and index < len(self.api_keys) - 1:
+                    print("GEMINI key rate-limited, rotating to next configured key", flush=True)
+                    continue
+                raise last_exc from exc
+
+            try:
+                return response.json()
+            except ValueError as exc:
+                raise GeminiError("Gemini returned invalid JSON payload") from exc
+
+        if last_exc is not None:
+            raise last_exc
+        raise GeminiError("Gemini request failed")
 
     async def generate_json(
         self,
@@ -55,10 +92,6 @@ class GeminiClient:
         user_prompt: str,
         temperature: float = 0.4,
     ) -> dict[str, Any]:
-        if not self.api_key:
-            raise GeminiError("GEMINI_API_KEY is not configured")
-
-        url = f"{self.base_url}/{self.model}:generateContent"
         payload = {
             "system_instruction": {"parts": [{"text": system_instruction}]},
             "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
@@ -67,24 +100,7 @@ class GeminiClient:
                 "responseMimeType": "application/json",
             },
         }
-
-        try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(
-                    url,
-                    params={"key": self.api_key},
-                    json=payload,
-                )
-                response.raise_for_status()
-        except httpx.HTTPError as exc:
-            status = getattr(getattr(exc, "response", None), "status_code", None)
-            detail = f"HTTP {status}" if status is not None else type(exc).__name__
-            raise GeminiError(f"Gemini request failed: {detail}") from exc
-
-        try:
-            data = response.json()
-        except ValueError as exc:
-            raise GeminiError("Gemini returned invalid JSON payload") from exc
+        data = await self._post(payload)
         text = _strip_json_fence(_extract_text(data))
         try:
             parsed = json.loads(text)
@@ -101,31 +117,10 @@ class GeminiClient:
         user_prompt: str,
         temperature: float = 0.4,
     ) -> str:
-        if not self.api_key:
-            raise GeminiError("GEMINI_API_KEY is not configured")
-
-        url = f"{self.base_url}/{self.model}:generateContent"
         payload = {
             "system_instruction": {"parts": [{"text": system_instruction}]},
             "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
             "generationConfig": {"temperature": temperature},
         }
-
-        try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(
-                    url,
-                    params={"key": self.api_key},
-                    json=payload,
-                )
-                response.raise_for_status()
-        except httpx.HTTPError as exc:
-            status = getattr(getattr(exc, "response", None), "status_code", None)
-            detail = f"HTTP {status}" if status is not None else type(exc).__name__
-            raise GeminiError(f"Gemini request failed: {detail}") from exc
-
-        try:
-            data = response.json()
-        except ValueError as exc:
-            raise GeminiError("Gemini returned invalid JSON payload") from exc
+        data = await self._post(payload)
         return _extract_text(data)
