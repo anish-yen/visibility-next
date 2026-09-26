@@ -22,16 +22,9 @@ export default async function Home() {
           Measure how you show up in AI-style answers
         </h1>
         <p className="text-slate-400">
-          Sign in to run audits, compare competitors, and get content briefs.
-          Point the app at your Supabase project with{" "}
-          <code className="rounded bg-slate-800 px-1.5 py-0.5 text-sm text-slate-200">
-            frontend/.env.local
-          </code>{" "}
-          and your API at{" "}
-          <code className="rounded bg-slate-800 px-1.5 py-0.5 text-sm text-slate-200">
-            NEXT_PUBLIC_API_URL
-          </code>
-          .
+          Sign up free, enter your product URL, and get your AI visibility
+          score: the 8 buyer questions, every answer, and the sources ChatGPT
+          cited instead of you.
         </p>
         <div className="flex flex-wrap gap-3">
           <Link
