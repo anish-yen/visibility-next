@@ -10,6 +10,7 @@ create table if not exists visibility_cycles (
   mention_rate numeric,
   citation_map jsonb,
   prompt_results jsonb,
+  prompt_set jsonb,
   tech_checks jsonb,
   artifacts jsonb,
   lift numeric,

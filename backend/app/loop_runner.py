@@ -50,6 +50,8 @@ MAX_CYCLES = 6                  # hard cap so the loop always terminates
 class SnapshotStore(Protocol):
     async def save(self, snapshot: dict[str, Any]) -> str: ...
     async def latest(self, audit_id: str) -> dict[str, Any] | None: ...
+    async def list(self, audit_id: str) -> list[dict[str, Any]]: ...
+    async def get(self, audit_id: str, cycle_number: int) -> dict[str, Any] | None: ...
 
 
 def _evaluate_with_real_engines(
@@ -189,28 +191,16 @@ async def run_cycle(
             brand_label=target_label,
         ))
 
-    # 7. snapshot + lift vs previous cycle
+    # 7. lift + stopping rule are decided BEFORE persisting, so the stored
+    #    row carries lift/decision for the next cycle's plateau check.
     mention_rate = (
         sum(1 for p in prompt_results if p.get("mentioned")) / len(prompt_results)
         if prompt_results else 0.0
     )
-    snapshot = {
-        "audit_id": audit_id,
-        "cycle_number": cycle_number,
-        "prompt_set": prompts,
-        "prompt_results": prompt_results,
-        "mention_rate": round(mention_rate, 3),
-        "citation_map": citation_map,
-        "tech_checks": checks,
-        "artifacts": artifacts,
-    }
-    snapshot_id = await snapshot_store.save(snapshot)
-
     lift = None
     if previous:
         lift = round(mention_rate - previous["mention_rate"], 3)
 
-    # 8. stopping rule
     decision = "continue"
     reason = ""
     if mention_rate >= TARGET_MENTION_RATE:
@@ -221,8 +211,21 @@ async def run_cycle(
         prev_lift = previous.get("lift")
         if prev_lift is not None and abs(prev_lift) < PLATEAU_DELTA:
             decision, reason = "stop", f"plateau: lift {lift} and {prev_lift} both under {PLATEAU_DELTA}"
-    snapshot["lift"] = lift
-    snapshot["decision"] = decision
-    snapshot["decision_reason"] = reason
+
+    # 8. snapshot
+    snapshot = {
+        "audit_id": audit_id,
+        "cycle_number": cycle_number,
+        "prompt_set": prompts,
+        "prompt_results": prompt_results,
+        "mention_rate": round(mention_rate, 3),
+        "citation_map": citation_map,
+        "tech_checks": checks,
+        "artifacts": artifacts,
+        "lift": lift,
+        "decision": decision,
+        "decision_reason": reason,
+    }
+    snapshot_id = await snapshot_store.save(snapshot)
     snapshot["snapshot_id"] = snapshot_id
     return snapshot
