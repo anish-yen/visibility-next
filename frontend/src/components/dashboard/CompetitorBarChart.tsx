@@ -57,7 +57,7 @@ export function CompetitorBarChart({ scores }: Props) {
               borderRadius: "8px",
             }}
             labelStyle={{ color: "#e2e8f0" }}
-            formatter={(value) => [`${value}`, "Simulated score"]}
+            formatter={(value) => [`${value}`, "Visibility score"]}
             labelFormatter={(_, payload) =>
               (payload?.[0]?.payload as { full?: string })?.full || ""
             }
