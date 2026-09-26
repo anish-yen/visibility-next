@@ -15,7 +15,7 @@ export function AuthShell({ title, subtitle, children }: AuthShellProps) {
             href="/"
             className="text-sm font-medium text-indigo-400 hover:text-indigo-300"
           >
-            AI Visibility Auditor
+            Zeteum
           </Link>
           <h1 className="mt-4 text-2xl font-semibold tracking-tight text-white">
             {title}
