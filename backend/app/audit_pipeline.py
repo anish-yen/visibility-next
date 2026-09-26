@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import random
 import re
 import uuid
 from typing import Any
@@ -13,6 +15,28 @@ from app.services.gemini_client import GeminiClient, GeminiError
 PROMPT_TARGET_MIN = 8
 PROMPT_TARGET_MAX = 12
 MAX_PROMPT_CHARS = 120
+
+
+def _allow_heuristic_fallback() -> bool:
+    """Dev-only escape hatch: heuristic prompts/scores are never user-facing by default."""
+    return os.environ.get("ALLOW_HEURISTIC_FALLBACK", "").strip().lower() in {"1", "true", "yes"}
+
+
+async def _gemini_with_backoff(operation: Any, *, attempts: int, label: str) -> Any:
+    delays = (12.0, 35.0, 80.0)
+    last_exc: GeminiError | None = None
+    for attempt in range(attempts):
+        try:
+            return await operation()
+        except GeminiError as exc:
+            last_exc = exc
+            print(f"{label} failed (attempt {attempt + 1}/{attempts}): {exc}", flush=True)
+            if attempt < attempts - 1:
+                base = delays[min(attempt, len(delays) - 1)]
+                await asyncio.sleep(base + random.uniform(0.0, base * 0.4))
+    if last_exc is not None:
+        raise last_exc
+    raise GeminiError(f"{label} failed")
 PROMPT_BUCKETS = (
     "informational",
     "comparative",
@@ -557,6 +581,70 @@ def _fallback_prompts(
     )
 
 
+async def _refine_target_category_with_gemini(target_site: dict[str, Any]) -> None:
+    client = GeminiClient()
+    distilled = distill_site_context(target_site)
+    evidence = {
+        "domain": target_site.get("domain"),
+        "label": distilled.get("label"),
+        "summary": distilled.get("summary"),
+        "keywords": (distilled.get("keywords") or [])[:12],
+        "page_highlights": distilled.get("page_highlights") or [],
+        "heuristic_category_guess": distilled.get("category") or "",
+    }
+    system_instruction = (
+        "You identify what a company sells from its website text. Return strict JSON only."
+    )
+    user_prompt = f"""
+Based on the website evidence below, identify the company precisely.
+
+Return JSON with this exact shape:
+{{
+  "category": "string",
+  "use_cases": ["string"],
+  "target_customer": "string"
+}}
+
+Rules:
+- "category": what the company SELLS, 2-6 lowercase words, e.g. "ai visibility software" or "payments infrastructure". A category, not a tagline, not a use case, not the company name.
+- "use_cases": up to 4 short buyer use-case phrases (2-5 words each) grounded in the evidence.
+- "target_customer": who buys it, 2-5 words.
+- Correct the heuristic guess when it is wrong.
+- No explanations or text outside the JSON object.
+
+Website evidence:
+{json.dumps(evidence, ensure_ascii=True)}
+"""
+    data = await client.generate_json(
+        system_instruction=system_instruction,
+        user_prompt=user_prompt,
+        temperature=0.2,
+    )
+    category = str(data.get("category", "")).strip().lower()
+    if not (3 <= len(category) <= 80) or len(category.split()) > 8 or "|" in category:
+        raise GeminiError("Gemini category refinement returned an unusable category")
+    use_cases_raw = data.get("use_cases") or []
+    if not isinstance(use_cases_raw, list):
+        use_cases_raw = []
+    use_cases = [
+        str(item).strip().lower()
+        for item in use_cases_raw
+        if 3 <= len(str(item).strip()) <= 60
+    ][:4]
+    target_customer = str(data.get("target_customer", "")).strip().lower()[:80]
+
+    target_site["category_override"] = category
+    if use_cases:
+        target_site["use_cases_override"] = use_cases
+    if target_customer:
+        target_site["customer_override"] = target_customer
+    target_site["category_source"] = "gemini"
+    print(
+        f"Gemini category refinement: {category} (customer: {target_customer or 'unknown'})",
+        flush=True,
+    )
+
+
 async def _generate_prompts_with_gemini(
     state: audit_store.AuditState,
     target_site: dict[str, Any],
@@ -581,10 +669,20 @@ async def _generate_prompts_with_gemini(
     )
 
     system_instruction = (
-        "You generate realistic buyer search prompts for an AI visibility audit. "
-        "Return JSON only. Every prompt must be one sentence, human-readable, and under 120 characters. "
+        "You write realistic buyer questions for an AI visibility audit. Return JSON only. "
+        "Every prompt must be a natural question a real buyer would type into an AI assistant "
+        "while researching this kind of product: conversational, specific, and grounded in what "
+        "the company actually sells. "
+        "Good examples of the register: \"How do I get ChatGPT to recommend my SaaS product to buyers?\", "
+        "\"What is the best AI visibility tool for a B2B startup?\", "
+        "\"Profound vs Peec: which one tracks ChatGPT mentions better?\", "
+        "\"alternatives to Profound for ai visibility\", "
+        "\"how do i get my startup cited by ai chatbots\", "
+        "\"service that audits whether chatgpt mentions your product\". "
+        "Casual lowercase search-style queries are just as good as polished questions. "
+        "Bad prompts are telegraphic template fragments like \"Acme for project planning\" or "
+        "\"best platform for payments apis\" - never write those. "
         "Do not paste source text, titles, menus, taglines, or paragraphs from the website. "
-        "Make prompts specific to buyer use cases, evaluation, pricing, implementation, trust, and competitor comparison. "
         "Do not include explanations or any text outside the JSON object. "
         "Return strict JSON only."
     )
@@ -597,11 +695,13 @@ Requirements:
 - Keep each prompt under {MAX_PROMPT_CHARS} characters.
 - Use the real brand/category language from the crawl, but do not copy long source text.
 - Cover these areas across the full set: informational, comparative, pricing, trust/reviews, implementation/onboarding, and use-case queries.
+- Mix branded and unbranded questions: some name the company or the competitor directly, many are brand-agnostic buyer questions whose best answer would mention them.
+- BANNED shapes: "<Brand> for <use case>", "best platform for <use case>", "is <Brand> good for <use case>", or any prompt that reads like filled template slots.
 - Avoid placeholders like "your market", "your product", or generic filler.
 - Avoid raw nav/menu text such as "Products Solutions Developers Resources Pricing".
 - Avoid pasting titles with separators like "|" or long taglines.
-- Include competitor names when useful.
-- Prefer concrete buyer wording like "vs", "pricing", "alternatives", "for SaaS billing", "for marketplaces", "easy to implement".
+- Include competitor names in at least one comparison question when a competitor is provided.
+- Prefer concrete buyer wording like "vs", "pricing", "alternatives", "how do I", "which tool", "worth it".
 - No explanations, bullet points, or notes.
 
 Return JSON with this exact shape:
@@ -636,14 +736,8 @@ Competitor distilled context:
         target_distilled=target_distilled,
         competitor_distilled=competitor_distilled,
     )
-    cleaned = _ensure_prompt_coverage(
-        cleaned,
-        state=state,
-        target_distilled=target_distilled,
-        competitor_distilled=competitor_distilled,
-    )
     if len(cleaned) < PROMPT_TARGET_MIN:
-        raise GeminiError("Prompt generation returned too few usable prompts after backfill")
+        raise GeminiError("Prompt generation returned too few usable prompts")
     return cleaned[:PROMPT_TARGET_MAX]
 
 
@@ -654,73 +748,81 @@ async def _evaluate_prompt(
     competitor_sites: list[dict[str, Any]],
 ) -> dict[str, Any]:
     client = GeminiClient()
-    target_distilled = distill_site_context(target_site)
-    competitor_distilled = [distill_site_context(site) for site in competitor_sites if site.get("domain")]
     target_label = target_site.get("label") or _brand_label(target_site.get("domain", ""))
     competitor_labels = [
         site.get("label") or _brand_label(site.get("domain", ""))
         for site in competitor_sites
         if site.get("domain")
     ]
-    system_instruction = (
-        "You simulate a customer-facing AI assistant answer, then grade whether the target brand "
-        "earned visibility in that answer. Return strict JSON only."
+
+    answer_system = (
+        "You are a helpful AI assistant answering a prospective buyer's question. "
+        "Answer from your own knowledge, the way a public AI assistant would answer any user. "
+        "Recommend specific brands or products when they are relevant. "
+        "Be concise: two to five sentences."
     )
-    user_prompt = f"""
-Prompt from a prospective customer:
+    answer = await client.generate_text(
+        system_instruction=answer_system,
+        user_prompt=prompt["text"],
+        temperature=0.4,
+    )
+
+    grade_system = (
+        "You grade brand visibility in an AI assistant's answer. Return strict JSON only."
+    )
+    grade_user = f"""
+Buyer question:
 {prompt['text']}
 
-Target brand: {target_label}
-Competitor brands: {competitor_labels}
+AI assistant's answer:
+\"\"\"{answer}\"\"\"
 
-Use the distilled site context below to answer as a helpful AI assistant. Then evaluate the target brand's visibility.
+Target brand: {target_label} (website: {target_site.get('domain', '')})
+Competitor brands: {competitor_labels}
 
 Return JSON exactly like:
 {{
-  "answer": "string",
-  "target_role": "central|supporting|absent",
+  "target_mentioned": true,
+  "target_prominence": "first|later|absent",
   "competitor_mentions": ["Brand A"],
-  "competitor_role": "none|supporting|strong",
-  "fit_score": 0.0,
-  "explanation": "string"
+  "explanation": "one sentence"
 }}
 
 Rules:
-- "target_role" is central if the target is a top recommendation or best fit.
-- "target_role" is supporting if the target is mentioned positively but is not the main answer.
-- "target_role" is absent if not mentioned.
-- "competitor_role" is strong if competitors dominate the answer, supporting if they are mentioned but not dominant, none otherwise.
-- "fit_score" must be between 0 and 1 based on how well the target matches the prompt.
-
-Primary company context:
-{json.dumps(target_distilled, ensure_ascii=True)}
-
-Competitor context:
-{json.dumps(competitor_distilled, ensure_ascii=True)}
+- Count mentions of the target under any name or alias (brand name, website name, or common shorthand).
+- "target_prominence" is "first" if the target is the first brand the answer recommends, "later" if it appears after other brands, "absent" if it is not mentioned.
+- "competitor_mentions" lists only brands from the competitor list that appear in the answer.
+- Judge only the answer text, never outside knowledge about these companies.
 """
     data = await client.generate_json(
-        system_instruction=system_instruction,
-        user_prompt=user_prompt,
-        temperature=0.3,
+        system_instruction=grade_system,
+        user_prompt=grade_user,
+        temperature=0.0,
     )
 
-    target_role = str(data.get("target_role", "absent")).strip().lower()
-    competitor_role = str(data.get("competitor_role", "none")).strip().lower()
-    if target_role not in {"central", "supporting", "absent"}:
-        raise GeminiError("Gemini returned an invalid target role")
-    if competitor_role not in {"none", "supporting", "strong"}:
+    target_mentioned = bool(data.get("target_mentioned"))
+    prominence = str(data.get("target_prominence", "absent")).strip().lower()
+    if prominence not in {"first", "later", "absent"}:
+        prominence = "later" if target_mentioned else "absent"
+    if not target_mentioned:
+        prominence = "absent"
+    target_role = {"first": "central", "later": "supporting", "absent": "absent"}[prominence]
+
+    competitor_mentions_raw = data.get("competitor_mentions", [])
+    if not isinstance(competitor_mentions_raw, list):
+        competitor_mentions_raw = []
+    competitor_mentions = [str(item).strip() for item in competitor_mentions_raw if str(item).strip()]
+
+    if not competitor_mentions:
         competitor_role = "none"
+    elif target_role == "absent":
+        competitor_role = "strong"
+    elif len(competitor_mentions) >= 2 and target_role != "central":
+        competitor_role = "strong"
+    else:
+        competitor_role = "supporting"
 
-    raw_strength = data.get("fit_score", 0.0)
-    try:
-        fit_score = float(raw_strength)
-    except (TypeError, ValueError) as exc:
-        raise GeminiError("Gemini returned a non-numeric fit score") from exc
-    fit_score = max(0.0, min(1.0, fit_score))
-
-    competitor_mentions = data.get("competitor_mentions", [])
-    if not isinstance(competitor_mentions, list):
-        competitor_mentions = []
+    fit_score = {"central": 0.85, "supporting": 0.55, "absent": 0.0}[target_role]
 
     mention_strength, score_components = _compute_prompt_score(
         target_role=target_role,
@@ -728,24 +830,36 @@ Competitor context:
         fit_score=fit_score,
         prompt=prompt,
         target_site=target_site,
-        competitor_mentions=[str(item).strip() for item in competitor_mentions if str(item).strip()],
+        competitor_mentions=competitor_mentions,
     )
-    target_mentioned = target_role != "absent"
+
+    grader_note = str(data.get("explanation", "")).strip()
+    prominence_label = {
+        "central": "mentioned first",
+        "supporting": "mentioned",
+        "absent": "not mentioned",
+    }[target_role]
+    explanation = f"Real Gemini answer graded: target {prominence_label}"
+    if competitor_mentions:
+        explanation += f"; competitors mentioned: {', '.join(competitor_mentions)}"
+    if grader_note:
+        explanation += f". {grader_note}"
 
     return {
         "id": prompt["id"],
         "text": prompt["text"],
         "intent": prompt.get("intent"),
-        "mentioned": target_mentioned,
+        "mentioned": target_role != "absent",
         "score": round(mention_strength, 2),
-        "explanation": str(data.get("explanation", "")).strip() or "No explanation returned.",
-        "competitor_mentions": [str(item).strip() for item in competitor_mentions if str(item).strip()],
+        "explanation": explanation,
+        "competitor_mentions": competitor_mentions,
         "score_components": {
             **score_components,
             "target_role": target_role,
             "competitor_role": competitor_role,
         },
-        "answer": str(data.get("answer", "")).strip(),
+        "answer": answer,
+        "evaluation_source": "gemini_live",
     }
 
 
@@ -821,6 +935,7 @@ def _fallback_evaluation(
             "competitor_role": competitor_role,
         },
         "answer": "",
+        "evaluation_source": "heuristic",
     }
 
 
@@ -1322,32 +1437,60 @@ async def run_audit(audit_id: str) -> None:
         if not target_site.get("pages"):
             raise RuntimeError(target_site.get("error") or "Target crawl failed")
 
-        audit_store.update_progress(audit_id, stage="generating_prompts", progress_percent=38)
+        audit_store.update_progress(audit_id, stage="generating_prompts", progress_percent=30)
         try:
-            prompts = await _generate_prompts_with_gemini(state, target_site, normalized_competitors)
+            await _gemini_with_backoff(
+                lambda: _refine_target_category_with_gemini(target_site),
+                attempts=2,
+                label="GEMINI category refinement",
+            )
         except GeminiError as exc:
+            print(f"GEMINI category refinement unavailable, keeping heuristic category: {exc}", flush=True)
+
+        audit_store.update_progress(audit_id, stage="generating_prompts", progress_percent=38)
+        prompts_source = "gemini"
+        try:
+            prompts = await _gemini_with_backoff(
+                lambda: _generate_prompts_with_gemini(state, target_site, normalized_competitors),
+                attempts=3,
+                label="GEMINI prompt generation",
+            )
+        except GeminiError as exc:
+            if not _allow_heuristic_fallback():
+                raise RuntimeError(
+                    "The AI engine could not generate buyer prompts right now (rate limit or "
+                    "temporary error). No audit results were produced. Please run the audit "
+                    "again in a few minutes."
+                ) from exc
             print(f"GEMINI prompt generation failed, using fallback prompts: {exc}", flush=True)
             prompts = _fallback_prompts(state, target_site, normalized_competitors)
+            prompts_source = "fallback"
 
         audit_store.update_progress(audit_id, stage="evaluating", progress_percent=64)
         prompt_results: list[dict[str, Any]] = []
+        fallback_evaluations = 0
         for prompt in prompts:
-            result = None
-            for attempt in range(3):
-                try:
-                    result = await _evaluate_prompt(
-                        prompt=prompt,
+            try:
+                result = await _gemini_with_backoff(
+                    lambda p=prompt: _evaluate_prompt(
+                        prompt=p,
                         target_site=target_site,
                         competitor_sites=normalized_competitors,
-                    )
-                    break
-                except GeminiError as exc:
-                    print(f"GEMINI evaluation failed (attempt {attempt + 1}/3): {exc}", flush=True)
-                    if attempt < 2:
-                        await asyncio.sleep(25)
-            if result is None:
+                    ),
+                    attempts=3,
+                    label="GEMINI evaluation",
+                )
+            except GeminiError as exc:
+                if not _allow_heuristic_fallback():
+                    raise RuntimeError(
+                        "The AI engine was rate-limited mid-audit and could not finish the real "
+                        "evaluation. No partial results were produced. Please run the audit "
+                        "again in a few minutes."
+                    ) from exc
                 result = _fallback_evaluation(prompt, target_site, normalized_competitors)
+                fallback_evaluations += 1
             prompt_results.append(result)
+            await asyncio.sleep(2.0)
 
         audit_store.update_progress(audit_id, stage="analyzing", progress_percent=86)
         visibility_score, competitor_scores, target_mention_rate, score_components = _build_competitor_scores(
@@ -1386,7 +1529,15 @@ async def run_audit(audit_id: str) -> None:
             "prompt_count": len(prompt_results),
             "prompt_bucket_counts": _bucket_counts(prompt_results),
             "score_components": score_components,
-            "evaluation_note": "Directional simulated estimate grounded in crawled pages and Gemini-generated answers.",
+            "category_source": target_site.get("category_source", "heuristic"),
+            "prompts_source": prompts_source,
+            "fallback_evaluations": fallback_evaluations,
+            "degraded": prompts_source == "fallback" or fallback_evaluations > 0,
+            "evaluation_note": (
+                "Visibility measured from real Gemini answers to each buyer prompt, graded for brand mentions. Not a live ChatGPT or Perplexity measurement."
+                if prompts_source == "gemini" and fallback_evaluations == 0
+                else "Degraded: some results used heuristic estimation because the AI engine was unavailable."
+            ),
         }
 
         audit_store.complete_audit(
