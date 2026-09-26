@@ -18,25 +18,22 @@ evidence, and re-tests until it plateaus.
 
 1. `backend/.env`: set `GEMINI_MODEL=gemini-2.0-flash` (grounding needs a 2.x model).
 2. Run `backend/supabase/migrations/visibility_cycles.sql` in the Supabase SQL editor.
-3. Implement the `SnapshotStore` protocol from `loop_runner.py` (~20 lines over the
-   existing Supabase admin client: `save()` inserts a row, `latest()` selects the
-   newest by `cycle_number`).
+3. Snapshot persistence: `app/cycle_store.py`. `get_cycle_store()` returns the
+   Supabase store when `SUPABASE_URL` + `SUPABASE_SERVICE_KEY` are set, else a
+   shared in-memory store (local dev/tests). Both implement save/latest/list/get.
 
-## Wiring (one endpoint, ~30 lines)
+## Wired
 
-```python
-# app/routers/audits.py
-from app import loop_runner
+- `POST /audits/{id}/cycle` (202): owner-only, runs `loop_runner.run_cycle` as a
+  background task with `cycle_store.get_cycle_store()`.
+- `GET /audits/{id}/cycles`: cycle summaries (newest first) for the frontend.
+- `GET /audits/{id}/cycles/{n}`: one full snapshot (prompt results, citation map,
+  tech checks, rewrite artifacts).
+- Snapshots persist lift/decision at save time, so the plateau rule reads real
+  history across restarts.
 
-@router.post("/audits/{audit_id}/cycle", response_model=dict)
-async def run_cycle_endpoint(request: Request, audit_id: str, background_tasks: BackgroundTasks):
-    audit = audit_store.get(audit_id)
-    _require_owner(request, audit)
-    background_tasks.add_task(loop_runner.run_cycle, audit_id, SupabaseSnapshotStore())
-    return {"status": "running", "audit_id": audit_id}
-```
-
-Then `GET /audits/{id}/cycles` reads the snapshots back for the frontend.
+Tests: `backend/tests/` (13 tests; `pip install -r requirements-dev.txt`,
+`python -m pytest tests/`).
 
 ## Later upgrades (not blockers)
 
