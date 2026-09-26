@@ -93,3 +93,39 @@ class GeminiClient:
         if not isinstance(parsed, dict):
             raise GeminiError("Gemini JSON response must be an object")
         return parsed
+
+    async def generate_text(
+        self,
+        *,
+        system_instruction: str,
+        user_prompt: str,
+        temperature: float = 0.4,
+    ) -> str:
+        if not self.api_key:
+            raise GeminiError("GEMINI_API_KEY is not configured")
+
+        url = f"{self.base_url}/{self.model}:generateContent"
+        payload = {
+            "system_instruction": {"parts": [{"text": system_instruction}]},
+            "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+            "generationConfig": {"temperature": temperature},
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(
+                    url,
+                    params={"key": self.api_key},
+                    json=payload,
+                )
+                response.raise_for_status()
+        except httpx.HTTPError as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            detail = f"HTTP {status}" if status is not None else type(exc).__name__
+            raise GeminiError(f"Gemini request failed: {detail}") from exc
+
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise GeminiError("Gemini returned invalid JSON payload") from exc
+        return _extract_text(data)
