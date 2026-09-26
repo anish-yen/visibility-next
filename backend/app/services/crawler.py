@@ -545,6 +545,17 @@ def distill_site_context(site: dict[str, Any]) -> dict[str, Any]:
             normalized_trust = "reliability"
             break
 
+    category_override = site.get("category_override")
+    use_cases_override = site.get("use_cases_override")
+    customer_override = site.get("customer_override")
+    if category_override:
+        product_category = category_override
+    if use_cases_override:
+        use_cases = use_cases_override
+        normalized_use_cases = list(use_cases_override)
+    if customer_override:
+        audiences = [customer_override]
+
     return {
         "domain": site.get("domain"),
         "label": label,
