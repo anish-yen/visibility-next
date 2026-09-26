@@ -470,7 +470,7 @@ export function DashboardFlow() {
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
                   <p className="text-sm font-medium text-slate-400">
-                    Simulated visibility score
+                    Visibility score
                   </p>
                   <p className="mt-2 text-5xl font-semibold tracking-tight text-white">
                     {detail.visibility_score != null
@@ -493,8 +493,8 @@ export function DashboardFlow() {
                 ) : null}
               </div>
               <p className="mt-2 max-w-xl text-sm text-slate-500">
-                Directional estimate from simulated evaluation — not a live ChatGPT
-                or Perplexity measurement.
+                Measured from real Gemini answers to each buyer prompt, graded for
+                brand mentions. Not a live ChatGPT or Perplexity measurement.
               </p>
               {detail.score_components?.bucket_scores ? (
                 <p className="mt-3 text-xs text-slate-500">
@@ -509,7 +509,7 @@ export function DashboardFlow() {
                 Competitor comparison
               </h3>
               <p className="mt-1 text-sm text-slate-500">
-                Simulated visibility scores by entity
+                Visibility scores by entity
               </p>
               <div className="mt-6">
                 <CompetitorBarChart scores={detail.competitor_scores} />
@@ -519,7 +519,7 @@ export function DashboardFlow() {
             <section className="rounded-2xl border border-slate-800 bg-slate-900/40 p-8">
               <h3 className="text-lg font-semibold text-white">Prompts</h3>
               <p className="mt-1 text-sm text-slate-500">
-                Buyer-style prompts and whether your brand appeared in the simulated answer
+                Buyer-style prompts and whether your brand appeared in the real AI answer
               </p>
               <div className="mt-4 overflow-x-auto">
                 <table className="w-full text-left text-sm">
