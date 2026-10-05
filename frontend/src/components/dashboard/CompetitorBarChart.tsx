@@ -28,7 +28,7 @@ export function CompetitorBarChart({ scores }: Props) {
 
   if (data.length === 0) {
     return (
-      <p className="text-sm text-slate-500">No competitor data for this audit.</p>
+      <p className="text-sm text-neutral-500">No competitor data for this audit.</p>
     );
   }
 
@@ -36,33 +36,33 @@ export function CompetitorBarChart({ scores }: Props) {
     <div className="h-72 w-full">
       <ResponsiveContainer width="100%" height="100%">
         <BarChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 8 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
+          <CartesianGrid strokeDasharray="3 3" stroke="#e5e5e5" vertical={false} />
           <XAxis
             dataKey="name"
-            tick={{ fill: "#94a3b8", fontSize: 11 }}
-            axisLine={{ stroke: "#475569" }}
+            tick={{ fill: "#737373", fontSize: 11 }}
+            axisLine={{ stroke: "#d4d4d4" }}
             tickLine={false}
           />
           <YAxis
             domain={[0, 100]}
-            tick={{ fill: "#94a3b8", fontSize: 11 }}
-            axisLine={{ stroke: "#475569" }}
+            tick={{ fill: "#737373", fontSize: 11 }}
+            axisLine={{ stroke: "#d4d4d4" }}
             tickLine={false}
             width={32}
           />
           <Tooltip
             contentStyle={{
-              backgroundColor: "#0f172a",
-              border: "1px solid #334155",
+              backgroundColor: "#ffffff",
+              border: "1px solid #e5e5e5",
               borderRadius: "8px",
             }}
-            labelStyle={{ color: "#e2e8f0" }}
+            labelStyle={{ color: "#171717" }}
             formatter={(value) => [`${value}`, "Visibility score"]}
             labelFormatter={(_, payload) =>
               (payload?.[0]?.payload as { full?: string })?.full || ""
             }
           />
-          <Bar dataKey="score" fill="#6366f1" radius={[6, 6, 0, 0]} maxBarSize={48} />
+          <Bar dataKey="score" fill="#4f46e5" radius={[6, 6, 0, 0]} maxBarSize={48} />
         </BarChart>
       </ResponsiveContainer>
     </div>
