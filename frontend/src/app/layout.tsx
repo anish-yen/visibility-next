@@ -14,7 +14,7 @@ const geistMono = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "AI Search Visibility Auditor",
+  title: "Zeteum",
   description:
     "Measure AI-style search visibility, compare competitors, and get content briefs.",
 };

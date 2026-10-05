@@ -26,6 +26,7 @@ class PromptRowOut(BaseModel):
     mentioned: bool
     score: float
     intent: str | None = None
+    names_brand: bool | None = None
     explanation: str | None = None
     competitor_mentions: list[str] = Field(default_factory=list)
     score_components: dict = Field(default_factory=dict)
