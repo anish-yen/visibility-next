@@ -232,7 +232,7 @@ export function DashboardFlow() {
 
   if (!sessionChecked) {
     return (
-      <div className="flex justify-center py-24 text-slate-400">
+      <div className="flex justify-center py-24 text-neutral-500">
         Loading session…
       </div>
     );
@@ -240,7 +240,7 @@ export function DashboardFlow() {
 
   if (loadingList) {
     return (
-      <div className="flex justify-center py-24 text-slate-400">
+      <div className="flex justify-center py-24 text-neutral-500">
         Loading audits…
       </div>
     );
@@ -248,7 +248,7 @@ export function DashboardFlow() {
 
   if (bootError) {
     return (
-      <div className="rounded-lg border border-amber-900/60 bg-amber-950/20 px-4 py-3 text-sm text-amber-100">
+      <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
         {bootError}
       </div>
     );
@@ -257,81 +257,81 @@ export function DashboardFlow() {
   return (
     <div className="mx-auto max-w-5xl space-y-10 pb-20 pt-8">
       {view === "create" ? (
-        <section className="rounded-2xl border border-slate-800 bg-slate-900/40 p-8">
-          <h2 className="text-xl font-semibold text-white">Run an audit</h2>
-          <p className="mt-1 text-sm text-slate-400">
+        <section className="rounded-2xl border border-neutral-200 bg-neutral-50 p-8">
+          <h2 className="text-xl font-semibold text-neutral-900">Run an audit</h2>
+          <p className="mt-1 text-sm text-neutral-500">
             Enter your site and up to three competitors. We will crawl, generate
             prompts, and simulate AI-style visibility (demo pipeline).
           </p>
           <form onSubmit={onSubmitAudit} className="mt-8 space-y-5">
             {formError ? (
-              <p className="rounded-md bg-red-950/60 px-3 py-2 text-sm text-red-200">
+              <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
                 {formError}
               </p>
             ) : null}
             <div>
-              <label className="block text-sm font-medium text-slate-300">
-                Primary domain <span className="text-red-400">*</span>
+              <label className="block text-sm font-medium text-neutral-700">
+                Primary domain <span className="text-red-700">*</span>
               </label>
               <input
                 required
                 value={primary}
                 onChange={(e) => setPrimary(e.target.value)}
                 placeholder="example.com"
-                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                className="mt-1 w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-neutral-900 placeholder:text-neutral-400 focus:border-indigo-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
               />
             </div>
             <div className="grid gap-4 sm:grid-cols-3">
               <div>
-                <label className="block text-sm font-medium text-slate-300">
+                <label className="block text-sm font-medium text-neutral-700">
                   Competitor 1
                 </label>
                 <input
                   value={c1}
                   onChange={(e) => setC1(e.target.value)}
                   placeholder="competitor.com"
-                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  className="mt-1 w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-neutral-900 placeholder:text-neutral-400 focus:border-indigo-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-300">
+                <label className="block text-sm font-medium text-neutral-700">
                   Competitor 2
                 </label>
                 <input
                   value={c2}
                   onChange={(e) => setC2(e.target.value)}
                   placeholder="optional"
-                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  className="mt-1 w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-neutral-900 placeholder:text-neutral-400 focus:border-indigo-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-300">
+                <label className="block text-sm font-medium text-neutral-700">
                   Competitor 3
                 </label>
                 <input
                   value={c3}
                   onChange={(e) => setC3(e.target.value)}
                   placeholder="optional"
-                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  className="mt-1 w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-neutral-900 placeholder:text-neutral-400 focus:border-indigo-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 />
               </div>
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-300">
+              <label className="block text-sm font-medium text-neutral-700">
                 Industry (optional)
               </label>
               <input
                 value={industry}
                 onChange={(e) => setIndustry(e.target.value)}
                 placeholder="e.g. payroll software, dental practices"
-                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white placeholder:text-slate-600 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                className="mt-1 w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-neutral-900 placeholder:text-neutral-400 focus:border-indigo-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
               />
             </div>
             <div className="flex flex-wrap gap-3 pt-2">
               <button
                 type="submit"
                 disabled={submitting}
-                className="rounded-lg bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
+                className="rounded-lg bg-neutral-900 px-5 py-2.5 text-sm font-semibold text-white hover:bg-neutral-700 disabled:opacity-50"
               >
                 {submitting ? "Starting…" : "Run audit"}
               </button>
@@ -339,7 +339,7 @@ export function DashboardFlow() {
                 <button
                   type="button"
                   onClick={cancelNewAudit}
-                  className="rounded-lg border border-slate-600 px-5 py-2.5 text-sm text-slate-300 hover:bg-slate-800"
+                  className="rounded-lg border border-neutral-300 px-5 py-2.5 text-sm text-neutral-700 hover:bg-neutral-100"
                 >
                   Cancel
                 </button>
@@ -350,25 +350,25 @@ export function DashboardFlow() {
       ) : null}
 
       {view === "running" && detail ? (
-        <section className="rounded-2xl border border-slate-800 bg-slate-900/40 p-8">
-          <h2 className="text-xl font-semibold text-white">Audit in progress</h2>
-          <p className="mt-1 font-mono text-sm text-indigo-300">
+        <section className="rounded-2xl border border-neutral-200 bg-neutral-50 p-8">
+          <h2 className="text-xl font-semibold text-neutral-900">Audit in progress</h2>
+          <p className="mt-1 font-mono text-sm text-indigo-700">
             {detail.primary_domain}
           </p>
           {detail.status === "failed" ? (
-            <p className="mt-4 rounded-md bg-red-950/50 px-3 py-2 text-sm text-red-200">
+            <p className="mt-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
               {detail.error_message || "Audit failed."}
             </p>
           ) : null}
 
           <div className="mt-8">
-            <div className="mb-2 flex justify-between text-xs text-slate-400">
+            <div className="mb-2 flex justify-between text-xs text-neutral-500">
               <span>Progress</span>
               <span>{detail.progress_percent}%</span>
             </div>
-            <div className="h-2 overflow-hidden rounded-full bg-slate-800">
+            <div className="h-2 overflow-hidden rounded-full bg-neutral-100">
               <div
-                className="h-full rounded-full bg-indigo-500 transition-all duration-500"
+                className="h-full rounded-full bg-indigo-600 transition-all duration-500"
                 style={{ width: `${detail.progress_percent}%` }}
               />
             </div>
@@ -387,12 +387,12 @@ export function DashboardFlow() {
                   key={s.key}
                   className={`rounded-lg border px-3 py-3 text-center text-xs font-medium ${
                     detail.status === "failed"
-                      ? "border-slate-800 bg-slate-950/40 text-slate-600"
+                      ? "border-neutral-200 bg-neutral-50 text-neutral-400"
                       : done
-                        ? "border-emerald-800/80 bg-emerald-950/30 text-emerald-200"
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-800"
                         : current
-                          ? "border-indigo-500 bg-indigo-950/40 text-indigo-100"
-                          : "border-slate-800 bg-slate-950/40 text-slate-500"
+                          ? "border-indigo-600 bg-indigo-50 text-indigo-700"
+                          : "border-neutral-200 bg-neutral-50 text-neutral-500"
                   }`}
                 >
                   {s.label}
@@ -401,12 +401,12 @@ export function DashboardFlow() {
             })}
           </ol>
           {detail.status !== "failed" ? (
-            <p className="mt-6 text-center text-sm text-slate-500">
+            <p className="mt-6 text-center text-sm text-neutral-500">
               Checking every 3 seconds…
             </p>
           ) : (
             <div className="mt-6 space-y-4 text-center">
-              <p className="text-sm text-slate-500">
+              <p className="text-sm text-neutral-500">
                 This run stopped. You can start a new audit below.
               </p>
               <button
@@ -423,7 +423,7 @@ export function DashboardFlow() {
                   setDetail(null);
                   setActiveAuditId(null);
                 }}
-                className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500"
+                className="rounded-lg bg-neutral-900 px-4 py-2 text-sm font-semibold text-white hover:bg-neutral-700"
               >
                 Start new audit
               </button>
@@ -437,11 +437,11 @@ export function DashboardFlow() {
           <div className="space-y-10">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
-                <h2 className="text-2xl font-semibold text-white">Results</h2>
-                <p className="mt-1 font-mono text-sm text-slate-400">
+                <h2 className="text-2xl font-semibold text-neutral-900">Results</h2>
+                <p className="mt-1 font-mono text-sm text-neutral-500">
                   {detail.primary_domain}
                   {detail.industry ? (
-                    <span className="text-slate-500"> · {detail.industry}</span>
+                    <span className="text-neutral-500"> · {detail.industry}</span>
                   ) : null}
                 </p>
               </div>
@@ -460,23 +460,23 @@ export function DashboardFlow() {
                   setDetail(null);
                   setActiveAuditId(null);
                 }}
-                className="rounded-lg border border-slate-600 px-4 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800"
+                className="rounded-lg border border-neutral-300 px-4 py-2 text-sm font-medium text-neutral-800 hover:bg-neutral-100"
               >
                 New audit
               </button>
             </div>
 
-            <section className="rounded-2xl border border-slate-800 bg-slate-900/40 p-8">
+            <section className="rounded-2xl border border-neutral-200 bg-neutral-50 p-8">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
-                  <p className="text-sm font-medium text-slate-400">
+                  <p className="text-sm font-medium text-neutral-500">
                     Visibility score
                   </p>
-                  <p className="mt-2 text-5xl font-semibold tracking-tight text-white">
+                  <p className="mt-2 text-5xl font-semibold tracking-tight text-neutral-900">
                     {detail.visibility_score != null
                       ? Math.round(detail.visibility_score)
                       : "—"}
-                    <span className="text-2xl text-slate-500">/100</span>
+                    <span className="text-2xl text-neutral-500">/100</span>
                   </p>
                 </div>
                 {weakBucketChips.length > 0 ? (
@@ -484,7 +484,7 @@ export function DashboardFlow() {
                     {weakBucketChips.map(([bucket, value]) => (
                       <span
                         key={bucket}
-                        className="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1 text-xs text-slate-300"
+                        className="rounded-full border border-neutral-300 bg-neutral-50 px-3 py-1 text-xs text-neutral-700"
                       >
                         Weak {formatBucketLabel(bucket)} · {value.toFixed(2)}
                       </span>
@@ -492,23 +492,23 @@ export function DashboardFlow() {
                   </div>
                 ) : null}
               </div>
-              <p className="mt-2 max-w-xl text-sm text-slate-500">
+              <p className="mt-2 max-w-xl text-sm text-neutral-500">
                 Measured from real Gemini answers to each buyer prompt, graded for
                 brand mentions. Not a live ChatGPT or Perplexity measurement.
               </p>
               {detail.score_components?.bucket_scores ? (
-                <p className="mt-3 text-xs text-slate-500">
+                <p className="mt-3 text-xs text-neutral-500">
                   Built from prompt-level mention strength, competitor presence,
                   intent fit, and bucket-level performance.
                 </p>
               ) : null}
             </section>
 
-            <section className="rounded-2xl border border-slate-800 bg-slate-900/40 p-8">
-              <h3 className="text-lg font-semibold text-white">
+            <section className="rounded-2xl border border-neutral-200 bg-neutral-50 p-8">
+              <h3 className="text-lg font-semibold text-neutral-900">
                 Competitor comparison
               </h3>
-              <p className="mt-1 text-sm text-slate-500">
+              <p className="mt-1 text-sm text-neutral-500">
                 Visibility scores by entity
               </p>
               <div className="mt-6">
@@ -516,50 +516,50 @@ export function DashboardFlow() {
               </div>
             </section>
 
-            <section className="rounded-2xl border border-slate-800 bg-slate-900/40 p-8">
-              <h3 className="text-lg font-semibold text-white">Prompts</h3>
-              <p className="mt-1 text-sm text-slate-500">
+            <section className="rounded-2xl border border-neutral-200 bg-neutral-50 p-8">
+              <h3 className="text-lg font-semibold text-neutral-900">Prompts</h3>
+              <p className="mt-1 text-sm text-neutral-500">
                 Buyer-style prompts and whether your brand appeared in the real AI answer
               </p>
               <div className="mt-4 overflow-x-auto">
                 <table className="w-full text-left text-sm">
                   <thead>
-                    <tr className="border-b border-slate-800 text-slate-400">
+                    <tr className="border-b border-neutral-200 text-neutral-500">
                       <th className="pb-3 pr-4 font-medium">Prompt</th>
                       <th className="pb-3 pr-4 font-medium">Type</th>
                       <th className="pb-3 pr-4 font-medium">Mentioned</th>
                       <th className="pb-3 font-medium">Score</th>
                     </tr>
                   </thead>
-                  <tbody className="text-slate-300">
+                  <tbody className="text-neutral-700">
                     {detail.prompts.map((p) => (
-                      <tr key={p.id} className="border-b border-slate-800/80">
+                      <tr key={p.id} className="border-b border-neutral-200">
                         <td className="py-3 pr-4 align-top">
-                          <div className="max-w-xl leading-relaxed text-slate-200">
+                          <div className="max-w-xl leading-relaxed text-neutral-800">
                             {p.text}
                           </div>
                           {p.explanation ? (
-                            <div className="mt-1 text-xs text-slate-500">
+                            <div className="mt-1 text-xs text-neutral-500">
                               {p.explanation}
                             </div>
                           ) : null}
                         </td>
                         <td className="py-3 pr-4 align-top">
-                          <span className="rounded-full border border-slate-700 bg-slate-950/50 px-2.5 py-1 text-xs text-slate-300 capitalize">
+                          <span className="rounded-full border border-neutral-300 bg-neutral-50 px-2.5 py-1 text-xs text-neutral-700 capitalize">
                             {formatBucketLabel(p.intent || "general")}
                           </span>
                         </td>
                         <td className="py-3 pr-4">
                           <span
                             className={
-                              p.mentioned ? "text-emerald-400" : "text-slate-500"
+                              p.mentioned ? "text-emerald-600" : "text-neutral-500"
                             }
                           >
                             {p.mentioned ? "Yes" : "No"}
                           </span>
                         </td>
                         <td className="py-3 tabular-nums">
-                          <span className="font-medium text-slate-200">
+                          <span className="font-medium text-neutral-800">
                             {p.score.toFixed(2)}
                           </span>
                         </td>
@@ -571,9 +571,9 @@ export function DashboardFlow() {
             </section>
 
             <section className="grid gap-8 lg:grid-cols-2">
-              <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-8">
-                <h3 className="text-lg font-semibold text-white">Recommendations</h3>
-                <p className="mt-1 text-sm text-slate-500">
+              <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-8">
+                <h3 className="text-lg font-semibold text-neutral-900">Recommendations</h3>
+                <p className="mt-1 text-sm text-neutral-500">
                   Ranked by priority score · click to load content brief
                 </p>
                 <ul className="mt-4 space-y-2">
@@ -584,17 +584,17 @@ export function DashboardFlow() {
                         onClick={() => void onSelectRecommendation(r.id)}
                         className={`w-full rounded-lg border px-4 py-3 text-left text-sm transition ${
                           selectedRecId === r.id
-                            ? "border-indigo-500 bg-indigo-950/30 text-white"
-                            : "border-slate-800 bg-slate-950/40 text-slate-300 hover:border-slate-600"
+                            ? "border-indigo-600 bg-indigo-50 text-neutral-900"
+                            : "border-neutral-200 bg-neutral-50 text-neutral-700 hover:border-neutral-400"
                         }`}
                       >
                         <div className="flex items-start justify-between gap-3">
                           <span className="font-medium">{r.title}</span>
-                          <span className="rounded-full border border-slate-700 px-2 py-0.5 text-[11px] text-slate-400">
+                          <span className="shrink-0 whitespace-nowrap rounded-full border border-neutral-300 px-2 py-0.5 text-[11px] text-neutral-500">
                             Priority {r.priority_score.toFixed(2)}
                           </span>
                         </div>
-                        <span className="mt-2 block text-xs leading-relaxed text-slate-400">
+                        <span className="mt-2 block text-xs leading-relaxed text-neutral-500">
                           {r.rationale}
                         </span>
                         {r.recommendation_evidence?.weak_prompt_buckets ? (
@@ -604,7 +604,7 @@ export function DashboardFlow() {
                               .map(([bucket, value]) => (
                                 <span
                                   key={bucket}
-                                  className="rounded-full border border-slate-700 bg-slate-950/60 px-2 py-0.5 text-[11px] text-slate-400"
+                                  className="rounded-full border border-neutral-300 bg-neutral-50 px-2 py-0.5 text-[11px] text-neutral-500"
                                 >
                                   {formatBucketLabel(bucket)} {value.toFixed(2)}
                                 </span>
@@ -617,25 +617,25 @@ export function DashboardFlow() {
                 </ul>
               </div>
 
-              <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-8">
-                <h3 className="text-lg font-semibold text-white">Content brief</h3>
+              <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-8">
+                <h3 className="text-lg font-semibold text-neutral-900">Content brief</h3>
                 {!selectedRecId ? (
-                  <p className="mt-4 text-sm text-slate-500">
+                  <p className="mt-4 text-sm text-neutral-500">
                     Select a recommendation to view or generate a brief.
                   </p>
                 ) : briefLoading ? (
-                  <p className="mt-4 text-sm text-slate-400">Generating brief…</p>
+                  <p className="mt-4 text-sm text-neutral-500">Generating brief…</p>
                 ) : briefError ? (
-                  <p className="mt-4 text-sm text-red-300">{briefError}</p>
+                  <p className="mt-4 text-sm text-red-700">{briefError}</p>
                 ) : selectedRec?.brief ? (
                   <article className="mt-4 space-y-4">
-                    <h4 className="text-base font-semibold text-indigo-200">
+                    <h4 className="text-base font-semibold text-indigo-700">
                       {selectedRec.brief.title}
                     </h4>
-                    <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4">
+                    <div className="rounded-xl border border-neutral-200 bg-neutral-50 p-4">
                       {selectedRec.recommendation_evidence?.example_prompts?.length ? (
                         <div className="mb-4">
-                          <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                          <p className="text-xs font-medium uppercase tracking-wide text-neutral-500">
                             Prompt evidence
                           </p>
                           <div className="mt-2 flex flex-wrap gap-2">
@@ -644,7 +644,7 @@ export function DashboardFlow() {
                               .map((prompt) => (
                                 <span
                                   key={prompt}
-                                  className="rounded-full border border-slate-700 bg-slate-900/70 px-3 py-1 text-xs text-slate-300"
+                                  className="rounded-full border border-neutral-300 bg-neutral-50 px-3 py-1 text-xs text-neutral-700"
                                 >
                                   {prompt}
                                 </span>
@@ -652,19 +652,19 @@ export function DashboardFlow() {
                           </div>
                         </div>
                       ) : null}
-                      <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-slate-300">
+                      <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-neutral-700">
                       {selectedRec.brief.body}
                       </pre>
                     </div>
                   </article>
                 ) : (
-                  <p className="mt-4 text-sm text-slate-500">Loading…</p>
+                  <p className="mt-4 text-sm text-neutral-500">Loading…</p>
                 )}
               </div>
             </section>
           </div>
         ) : (
-          <div className="py-16 text-center text-slate-500">Loading results…</div>
+          <div className="py-16 text-center text-neutral-500">Loading results…</div>
         )
       ) : null}
     </div>
