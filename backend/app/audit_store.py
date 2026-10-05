@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -8,6 +9,7 @@ from typing import Any
 from app.config import get_settings
 
 TABLE = "visibility_audits"
+log = logging.getLogger(__name__)
 
 
 def _iso() -> str:
@@ -39,7 +41,35 @@ _audits: dict[str, AuditState] = {}
 _user_audit_ids: dict[str, list[str]] = {}
 
 
+# Set when Supabase reports the audits table is missing (migration not applied).
+_table_missing = False
+
+
+def _is_missing_table(exc: Exception) -> bool:
+    text = f"{getattr(exc, 'code', '')} {exc}".lower()
+    return TABLE in text and (
+        "pgrst205" in text or "does not exist" in text or "could not find the table" in text
+    )
+
+
+def _fallback(exc: Exception) -> bool:
+    """Switch to in-memory storage if the table is missing; return True if handled."""
+    global _table_missing
+    if not _is_missing_table(exc):
+        return False
+    if not _table_missing:
+        log.warning(
+            "Table %s not found in Supabase; using in-memory audit storage "
+            "(audits will not survive restarts). Apply backend/supabase/migrations/visibility_audits.sql.",
+            TABLE,
+        )
+    _table_missing = True
+    return True
+
+
 def _db():
+    if _table_missing:
+        return None
     settings = get_settings()
     if not (settings.supabase_url and settings.supabase_service_key):
         return None
@@ -51,12 +81,16 @@ def _db():
 def _save(audit: AuditState) -> None:
     db = _db()
     if db is not None:
-        db.upsert(asdict(audit), on_conflict="id").execute()
-    else:
-        _audits[audit.id] = audit
-        ids = _user_audit_ids.setdefault(audit.user_id, [])
-        if audit.id not in ids:
-            ids.insert(0, audit.id)
+        try:
+            db.upsert(asdict(audit), on_conflict="id").execute()
+            return
+        except Exception as exc:
+            if not _fallback(exc):
+                raise
+    _audits[audit.id] = audit
+    ids = _user_audit_ids.setdefault(audit.user_id, [])
+    if audit.id not in ids:
+        ids.insert(0, audit.id)
 
 
 def _from_row(row: dict[str, Any]) -> AuditState:
@@ -107,7 +141,12 @@ def get(audit_id: str) -> AuditState | None:
     db = _db()
     if db is None:
         return _audits.get(audit_id)
-    rows = db.select("*").eq("id", audit_id).limit(1).execute().data or []
+    try:
+        rows = db.select("*").eq("id", audit_id).limit(1).execute().data or []
+    except Exception as exc:
+        if not _fallback(exc):
+            raise
+        return _audits.get(audit_id)
     return _from_row(rows[0]) if rows else None
 
 
@@ -115,7 +154,12 @@ def list_for_user(user_id: str) -> list[AuditState]:
     db = _db()
     if db is None:
         return [_audits[i] for i in _user_audit_ids.get(user_id, []) if i in _audits]
-    rows = db.select("*").eq("user_id", user_id).order("created_at", desc=True).execute().data or []
+    try:
+        rows = db.select("*").eq("user_id", user_id).order("created_at", desc=True).execute().data or []
+    except Exception as exc:
+        if not _fallback(exc):
+            raise
+        return [_audits[i] for i in _user_audit_ids.get(user_id, []) if i in _audits]
     return [_from_row(row) for row in rows]
 
 
