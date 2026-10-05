@@ -36,14 +36,14 @@ export default function UpdatePasswordPage() {
     >
       <form onSubmit={handleSubmit} className="space-y-5">
         {error ? (
-          <p className="rounded-md bg-red-950/80 px-3 py-2 text-sm text-red-200">
+          <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
             {error}
           </p>
         ) : null}
         <div>
           <label
             htmlFor="password"
-            className="block text-sm font-medium text-slate-300"
+            className="block text-sm font-medium text-neutral-700"
           >
             New password
           </label>
@@ -56,19 +56,19 @@ export default function UpdatePasswordPage() {
             minLength={8}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="mt-1 block w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-white focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            className="mt-1 block w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 text-neutral-900 focus:border-indigo-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
           />
         </div>
         <button
           type="submit"
           disabled={loading}
-          className="w-full rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow hover:bg-indigo-500 disabled:opacity-50"
+          className="w-full rounded-lg bg-neutral-900 px-4 py-2.5 text-sm font-semibold text-white shadow hover:bg-neutral-700 disabled:opacity-50"
         >
           {loading ? "Updating…" : "Update password"}
         </button>
       </form>
-      <p className="mt-6 text-center text-sm text-slate-400">
-        <Link href="/login" className="text-indigo-400 hover:underline">
+      <p className="mt-6 text-center text-sm text-neutral-500">
+        <Link href="/login" className="text-indigo-600 hover:underline">
           Log in instead
         </Link>
       </p>
