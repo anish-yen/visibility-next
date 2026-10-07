@@ -59,6 +59,17 @@ Links:
 - Training memory and live retrieval are different mechanisms. Site changes cannot directly edit a model's training weights. Published changes may take time to become retrievable and may not improve answers.
 - A model evaluating rewritten content that we injected is only a pre-check. It cannot prove independent discoverability or real-world lift.
 
+## How to actually move GEO
+
+SEO aims to improve search visibility across relevant keywords; GEO aims to raise mention rate across a battery of buyer prompts. Think "climb the search results" versus "raise the batting average," not optimize for one answer. Neither surface is fixed: search rankings and generated answers can vary by location, context, engine and time. An AI answer is generated rather than a permanent ranked list, but it need not change on every repeat.
+
+1. **Earn credible third-party mentions.** Make independent coverage a high-priority lever: relevant Reddit discussions, review sites, honest listicles and third-party comparison pages. Independent evidence can support recommendations better than self-praise. Earned-media research supports this direction, but which source moves a particular engine/category must be tested. Do not buy fake reviews or flood communities; posting and outreach still need approval.
+2. **Make the site quotable.** Publish factual pages that directly answer buyer questions, with clear pricing/conditions, FAQs, use cases and honest comparisons. Remove vague claims and give the engine something specific it can retrieve and cite.
+3. **Keep naming consistent.** Use the same product name and truthful category phrase across the site, documentation, profiles and approved third-party descriptions. Correct conflicting or outdated facts rather than repeating slogans.
+4. **Measure before and after with the same prompts.** Capture a baseline, then repeat the frozen buyer-prompt battery 30 days later under comparable engine/model/surface settings. Primary metric: unbranded mention rate, defined as prompts whose answer names the brand divided by completed eligible prompts. Preserve counts, errors, citations and dates; keep branded results separate. Repeated samples help distinguish noise from a change. A higher rate is evidence to investigate, not proof one edit caused it or a guarantee of future placement.
+
+This is the intended optimization playbook, not a claim the current app automates all four steps or a newly scheduled 30-day run. Sources: [earned-media and engine differences study](https://arxiv.org/html/2509.08919v1); [practical evidence, entity consistency and measurement guidance](https://auspia.ai/blog/trust-based-geo-ai-citations).
+
 ## Intended improvement workflow
 
 1. Crawl target and competitors, respecting robots.txt and rate limits. Extract page types, positioning and verified facts.
@@ -129,3 +140,5 @@ At the start of code work, explicitly read `PLAN.md` alongside `CLAUDE.md` and r
 ## Change log
 
 - October 7, 2026: created sanitized standing plan from Anish's project notes, September 25 measurement discussion, September 26 Aarav exchange, October 5 deployment handoff and fresh main-code inspection. No credentials or keys tab copied. No app logic changed.
+
+- October 7, 2026: added the GEO optimization playbook and 30-day same-prompt measurement checkpoint; clarified variability and evidence limits. Documentation only.
