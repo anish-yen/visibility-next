@@ -11,6 +11,8 @@ import {
 import type { AuditDetail } from "@/types/audit";
 import { CompetitorBarChart } from "./CompetitorBarChart";
 
+const WEAK_BUCKET_THRESHOLD = 0.65;
+
 const STAGE_FLOW = [
   { key: "crawling", label: "Crawling" },
   { key: "generating_prompts", label: "Generating prompts" },
@@ -222,9 +224,19 @@ export function DashboardFlow() {
   const weakBucketChips = useMemo(() => {
     if (!detail?.weak_prompt_buckets) return [];
     return Object.entries(detail.weak_prompt_buckets)
+      .filter(([, value]) => value < WEAK_BUCKET_THRESHOLD)
       .sort((a, b) => a[1] - b[1])
       .slice(0, 3);
   }, [detail]);
+
+  const unbrandedPrompts = useMemo(
+    () => detail?.prompts.filter((p) => !p.names_brand) ?? [],
+    [detail]
+  );
+  const brandedPrompts = useMemo(
+    () => detail?.prompts.filter((p) => p.names_brand) ?? [],
+    [detail]
+  );
 
   async function cancelNewAudit() {
     setWantsNewAudit(false);
@@ -519,7 +531,7 @@ export function DashboardFlow() {
             <section className="rounded-2xl border border-neutral-200 bg-neutral-50 p-8">
               <h3 className="text-lg font-semibold text-neutral-900">Prompts</h3>
               <p className="mt-1 text-sm text-neutral-500">
-                Buyer-style prompts and whether your brand appeared in the real AI answer
+                Unbranded buyer-style prompts and whether your brand appeared in the real AI answer. These are the only prompts counted toward your visibility score.
               </p>
               <div className="mt-4 overflow-x-auto">
                 <table className="w-full text-left text-sm">
@@ -532,7 +544,7 @@ export function DashboardFlow() {
                     </tr>
                   </thead>
                   <tbody className="text-neutral-700">
-                    {detail.prompts.map((p) => (
+                    {unbrandedPrompts.map((p) => (
                       <tr key={p.id} className="border-b border-neutral-200">
                         <td className="py-3 pr-4 align-top">
                           <div className="max-w-xl leading-relaxed text-neutral-800">
@@ -569,6 +581,64 @@ export function DashboardFlow() {
                 </table>
               </div>
             </section>
+
+            {brandedPrompts.length > 0 ? (
+              <section className="rounded-2xl border border-neutral-200 bg-neutral-50 p-8 opacity-80">
+                <h3 className="text-lg font-semibold text-neutral-900">
+                  Branded prompts (reference only)
+                </h3>
+                <p className="mt-1 text-sm text-neutral-500">
+                  These prompts name your brand or a competitor directly, so a mention is close to guaranteed. Shown for reference only — excluded from your visibility score.
+                </p>
+                <div className="mt-4 overflow-x-auto">
+                  <table className="w-full text-left text-sm">
+                    <thead>
+                      <tr className="border-b border-neutral-200 text-neutral-500">
+                        <th className="pb-3 pr-4 font-medium">Prompt</th>
+                        <th className="pb-3 pr-4 font-medium">Type</th>
+                        <th className="pb-3 pr-4 font-medium">Mentioned</th>
+                        <th className="pb-3 font-medium">Score</th>
+                      </tr>
+                    </thead>
+                    <tbody className="text-neutral-700">
+                      {brandedPrompts.map((p) => (
+                        <tr key={p.id} className="border-b border-neutral-200">
+                          <td className="py-3 pr-4 align-top">
+                            <div className="max-w-xl leading-relaxed text-neutral-800">
+                              {p.text}
+                            </div>
+                            {p.explanation ? (
+                              <div className="mt-1 text-xs text-neutral-500">
+                                {p.explanation}
+                              </div>
+                            ) : null}
+                          </td>
+                          <td className="py-3 pr-4 align-top">
+                            <span className="rounded-full border border-neutral-300 bg-neutral-50 px-2.5 py-1 text-xs text-neutral-700 capitalize">
+                              {formatBucketLabel(p.intent || "general")}
+                            </span>
+                          </td>
+                          <td className="py-3 pr-4">
+                            <span
+                              className={
+                                p.mentioned ? "text-emerald-600" : "text-neutral-500"
+                              }
+                            >
+                              {p.mentioned ? "Yes" : "No"}
+                            </span>
+                          </td>
+                          <td className="py-3 tabular-nums">
+                            <span className="font-medium text-neutral-800">
+                              {p.score.toFixed(2)}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            ) : null}
 
             <section className="grid gap-8 lg:grid-cols-2">
               <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-8">

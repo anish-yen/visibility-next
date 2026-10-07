@@ -11,7 +11,14 @@ completeness is reported separately as `content_readiness`.
 
 from types import SimpleNamespace
 
-from app.audit_pipeline import _build_competitor_scores, _compute_prompt_score
+from app.audit_pipeline import (
+    WEAK_BUCKET_THRESHOLD,
+    _brand_variants,
+    _build_competitor_scores,
+    _compute_prompt_score,
+    _find_brand,
+    _format_rationale,
+)
 
 FULL_SITE = {
     "domain": "target.com",
@@ -120,3 +127,52 @@ def test_competitor_scoring_only_counts_the_same_unbranded_headline_subset():
 
     acme = next(s for s in scores if s["label"] == "Acme")
     assert acme["score"] == 0.0
+
+
+def test_weak_label_only_applies_below_threshold():
+    """A strong bucket score (e.g. 0.96) must never be described as 'weak'."""
+    strong_rationale = _format_rationale(
+        bucket_name="informational",
+        bucket_score=0.96,
+        page_coverage_note="no FAQ/help page was found",
+    )
+    assert "weak" not in strong_rationale.lower(), strong_rationale
+    assert "0.96" in strong_rationale
+
+    weak_rationale = _format_rationale(
+        bucket_name="informational",
+        bucket_score=0.3,
+        page_coverage_note="no FAQ/help page was found",
+    )
+    assert "weak" in weak_rationale.lower(), weak_rationale
+
+    # The two thresholds agree: anything at or above WEAK_BUCKET_THRESHOLD is not "weak".
+    boundary_rationale = _format_rationale(
+        bucket_name="pricing",
+        bucket_score=WEAK_BUCKET_THRESHOLD,
+        page_coverage_note="pricing content is missing",
+    )
+    assert "weak" not in boundary_rationale.lower(), boundary_rationale
+
+
+def test_competitor_mention_is_detected_from_the_same_answer_text():
+    """Competitor mentions must be measured from the real answer text, not assumed."""
+    competitor_site = {
+        "domain": "acme.com",
+        "label": "Acme",
+        "pages": [{"url": "https://acme.com"}],
+        "page_type_counts": {"homepage": 1},
+    }
+    variants = _brand_variants(
+        competitor_site["label"], competitor_site["domain"], competitor_site
+    )
+
+    answer_mentioning_competitor = "for small teams, acme is a popular choice with solid reviews."
+    answer_without_competitor = "there are a few solid options depending on your team size."
+
+    assert any(_find_brand(answer_mentioning_competitor, v) >= 0 for v in variants), (
+        "a real mention of the competitor's own label must be detected in the answer text"
+    )
+    assert not any(_find_brand(answer_without_competitor, v) >= 0 for v in variants), (
+        "no competitor mention should be detected when the answer never names it"
+    )
