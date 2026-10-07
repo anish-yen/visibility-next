@@ -18,6 +18,7 @@ class CompetitorScoreOut(BaseModel):
     domain: str
     score: float
     label: str | None = None
+    content_readiness: float | None = None
 
 
 class PromptRowOut(BaseModel):

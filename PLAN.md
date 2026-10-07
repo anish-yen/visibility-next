@@ -1,7 +1,7 @@
 # Zeteum: standing product and execution plan
 
 Updated: October 7, 2026. Owner: Anish Yenduri.
-Code inspected: `main` at `2d6c3c9` before this documentation change.
+Code inspected: `main` at `2cac8b4` before this documentation change.
 
 Read this file before planning Zeteum work. It separates intent, code present, dated operational evidence and work not yet verified. It supersedes older status/priority claims in `CLAUDE.md`, `AGENTIC_LOOP.md` and `PLAN_OF_ACTION.md`; those files remain useful design and engineering notes, not a current completion checklist. This file contains no credentials.
 
@@ -17,8 +17,8 @@ The initial commercial experiment was a done-for-you service priced at $149, lat
 
 The latest working-plan block in Anish's project notes sets this order:
 
-1. Resolve the audit-table decision, apply the approved migration, deploy to staging and run one full end-to-end audit. `visibility_audits` stores audits; `visibility_cycles` is separate. A migration file in Git does not prove the live table exists.
-2. Fix competitor scoring before showing public audits. Main can award 70 to a competitor with zero mentions through content-completeness bonuses. Use the same unbranded prompt subset, denominator and visibility formula for target and competitors; keep content readiness separate. Regression tests must give all entities zero when no entity is mentioned and equal results for equal mention patterns.
+1. Resolve the audit-table decision, apply the approved migration, deploy to staging and run one full end-to-end audit. `visibility_audits` stores audits; `visibility_cycles` is separate. A migration file in Git does not prove the live table exists. **Blocked: needs Anish's explicit go-ahead before anyone touches the live database.**
+2. ~~Fix competitor scoring before showing public audits.~~ **Done, branch `fix/competitor-scoring-symmetry`, not yet merged.** See "Dated operational evidence" below for what was verified.
 3. Run 3-5 free audits on genuine small brands, not only Stripe/PayPal/Shopify. Preserve raw prompts, answers, citations, dates and failure records. Draft Reddit/X posts for Anish's review.
 4. Cold-email sending stays parked until those audits/posts show traction. Existing reply and permanent-bounce monitoring is separate from new outreach. Do not interpret old scheduled-wave notes as permission to send.
 5. Capture an audited site's actual typography, colors, spacing and copy voice in `style.md`, with do/don't examples, before asking a rewrite model to match it. This was proposed, not verified completed. Do not impose Zeteum's own style on every customer's website.
@@ -35,13 +35,17 @@ Source: fresh inspection of `main` on October 7.
 - `backend/app/services/answer_engines.py` already has optional Perplexity Sonar and OpenAI search runners. Sonar defaults to the `sonar` model and is credential-gated. The default cycle engine set is Gemini only. Sonar activation, credentials, billing and a successful production run are not verified.
 - Consumer ChatGPT/Perplexity web runners are stubs in code. Past manual logged-out screenshot tests are separate evidence, not implemented automatic lanes.
 - Supabase audit/cycle adapters and migration files exist. Audit storage falls back to memory when `visibility_audits` is missing, so those audits are lost on restart. The last engineering handoff reported that table missing; current database state has not been rechecked for this file. Do not claim durable history until table, write/read and restart checks pass.
-- Competitor visibility still includes page/comparison/review bonuses. Zero mentions can score 70. This remains a confirmed code defect.
+- Competitor visibility scoring fixed on branch `fix/competitor-scoring-symmetry` (not yet merged): competitors are now scored with the exact same per-prompt formula, weights and unbranded-prompt subset/denominator as the target (`_score_entity_against_rivals` in `audit_pipeline.py`, reusing `_compute_prompt_score`). Page/comparison/review completeness is reported separately as `content_readiness` on each entity and no longer blended into the visibility score. Three new unit tests in `backend/tests/test_scoring.py` cover: zero mentions scores zero for every entity regardless of content completeness (the literal reported bug), a competitor scores identically to the target under a symmetric mention pattern, and a mention on a branded-only prompt does not count toward a competitor's score. All 19 backend tests pass. Live-verified locally (not staging) with a real cal.com vs. calendly.com audit on real Gemini answers: a competitor mentioned centrally in every answer scored near 100 (legitimate, not the bug), the target scored 0 when never mentioned.
 
 ### Dated operational evidence
 
 October 5: PR #4 merged into main at `2d6c3c9`; Vercel was connected to `anish-yen/visibility-next`, root directory set to `frontend`, and that revision deployed. The login page was visually checked for the new restrained white/indigo design. A temporary deployment hook was removed after use.
 
 October 7: `/login` returned Zeteum content. A fetch of backend `/health` returned 503. One failed fetch is not a diagnosis of an outage; backend health and authenticated end-to-end operation remain unverified. A real login and future automatic deployments also need testing.
+
+October 7 (local dev, not staging/production): `backend/.env`'s `GEMINI_MODEL` was pinned to `gemini-2.0-flash`, which Google has sunset (API returns 404 "This model ... is no longer available" on every call). This broke prompt generation and evaluation for every local audit. Confirmed via a direct call to `GET https://generativelanguage.googleapis.com/v1beta/models`; `gemini-2.5-flash` works for both plain `generateContent` and the `google_search` grounding tool. Fixed locally in `backend/.env` (not committed, gitignored) and updated the non-secret `.env.example` default so fresh setups don't hit the same wall. Production/staging env vars were not touched or checked.
+
+October 7 (local dev): separately, prompt generation intermittently fails with "Prompt generation returned too few usable prompts" after 3 retries (distinct from the model-sunset issue above; this is Gemini returning fewer than `PROMPT_TARGET_MIN` prompts after sanitization). Observed twice, succeeded on retry both times. Not investigated further and not part of the scoring fix; flagging as an open flakiness item, not reproduced to a root cause.
 
 Links:
 - Repository: https://github.com/anish-yen/visibility-next
@@ -153,7 +157,7 @@ At the start of code work, explicitly read `PLAN.md` alongside `CLAUDE.md` and r
 | --- | --- |
 | Audit persistence | Approved migration, live write/read, survival across restart |
 | Staging audit | Authenticated end-to-end run with prompts, answers, labeled source and failures |
-| Scoring symmetry | Zero-mention and equal-mention regression tests |
+| Scoring symmetry | Zero-mention and equal-mention regression tests — done on `fix/competitor-scoring-symmetry` (unmerged); still needs Anish's review/merge and a staging check |
 | Small-brand validation | 3-5 dated real-brand audits with raw answers/citations |
 | Style-guided rewrites | Site-derived style.md, factual draft/diff and owner review |
 | Sonar comparison | Approved cost, successful independent queries, same-prompt side-by-side evidence |
@@ -166,3 +170,5 @@ At the start of code work, explicitly read `PLAN.md` alongside `CLAUDE.md` and r
 - October 7, 2026: added the GEO optimization playbook and 30-day same-prompt measurement checkpoint; clarified variability and evidence limits. Documentation only.
 
 - October 7, 2026: added Aeonza/AEO market context, the SEO versus GEO framing and unverified differentiator hypotheses. Documentation only.
+
+- October 7, 2026: fixed competitor scoring symmetry (priority 2) on branch `fix/competitor-scoring-symmetry`. Competitors now use the same per-prompt formula, weights and unbranded-prompt subset/denominator as the target; page completeness moved to a separate `content_readiness` field. Added 3 regression tests (`backend/tests/test_scoring.py`); all 19 backend tests pass. Verified locally against a real Gemini-backed audit. Also fixed a local-only `GEMINI_MODEL` sunset issue blocking all audits, and updated `.env.example`'s default. Not merged, not deployed; priority 1 (DB) remains blocked pending explicit DB go-ahead.

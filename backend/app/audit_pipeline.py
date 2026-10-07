@@ -976,6 +976,94 @@ def _fallback_evaluation(
     }
 
 
+def _content_readiness(site: dict[str, Any]) -> float:
+    """Page-completeness signal, reported separately from the mention-based visibility score."""
+    return round(
+        min(
+            1.0,
+            (0.45 if site.get("pages") else 0.0)
+            + (0.15 if _page_type_present(site, "comparison") else 0.0)
+            + (0.1 if _page_type_present(site, "reviews") else 0.0),
+        )
+        * 100,
+        1,
+    )
+
+
+def _score_entity_against_rivals(
+    *,
+    entity_label: str,
+    entity_site: dict[str, Any],
+    rival_label: str,
+    headline: list[dict[str, Any]],
+    total_prompts: int,
+    bucket_weights: dict[str, float],
+) -> float:
+    """Score a competitor with the exact per-prompt formula and weights used for the target.
+
+    `competitor_mentions` on each prompt never includes the target (see `_evaluate_prompt`),
+    so the target's own mention role is reconstructed from the stored `target_role` to decide
+    whether this entity or the target was more prominent on that prompt.
+    """
+    scored_prompts: list[dict[str, Any]] = []
+    mentioned_count = 0
+    for prompt in headline:
+        competitor_mentions = prompt.get("competitor_mentions", [])
+        rivals_mentioned = [m for m in competitor_mentions if m != entity_label]
+        entity_rank = next(
+            (i for i, m in enumerate(competitor_mentions) if m == entity_label),
+            None,
+        )
+        target_role = prompt.get("score_components", {}).get("target_role", "absent")
+        target_mentioned = target_role != "absent"
+
+        if entity_rank is None:
+            entity_role = "absent"
+        elif target_role == "central":
+            entity_role = "supporting"
+        elif entity_rank == 0:
+            entity_role = "central"
+        else:
+            entity_role = "supporting"
+
+        rivals = ([rival_label] if target_mentioned else []) + rivals_mentioned
+        if not rivals:
+            rival_role = "none"
+        elif entity_role == "absent":
+            rival_role = "strong"
+        elif len(rivals) >= 2 and entity_role != "central":
+            rival_role = "strong"
+        else:
+            rival_role = "supporting"
+
+        fit_score = {"central": 0.85, "supporting": 0.55, "absent": 0.0}[entity_role]
+        score, _ = _compute_prompt_score(
+            target_role=entity_role,
+            competitor_role=rival_role,
+            fit_score=fit_score,
+            prompt=prompt,
+            target_site=entity_site,
+            competitor_mentions=rivals,
+        )
+        if entity_role != "absent":
+            mentioned_count += 1
+        scored_prompts.append({**prompt, "score": score})
+
+    average_prompt_score = _safe_ratio(sum(p["score"] for p in scored_prompts), total_prompts)
+    mention_rate = round(_safe_ratio(mentioned_count, total_prompts), 2)
+    bucket_scores = _bucket_average_scores(scored_prompts)
+    present_weight = sum(w for b, w in bucket_weights.items() if b in bucket_scores)
+    weighted_bucket_score = (
+        sum(bucket_scores[b] * w for b, w in bucket_weights.items() if b in bucket_scores) / present_weight
+        if present_weight
+        else 0.0
+    )
+    return round(
+        ((average_prompt_score * 0.55) + (mention_rate * 0.2) + (weighted_bucket_score * 0.25)) * 100,
+        1,
+    )
+
+
 def _build_competitor_scores(
     state: audit_store.AuditState,
     prompts: list[dict[str, Any]],
@@ -1041,11 +1129,13 @@ def _build_competitor_scores(
         1,
     )
 
+    target_label = target_site.get("label") or _brand_label(target_site.get("domain", ""))
     scores = [
         {
             "domain": state.primary_domain,
             "score": overall_score,
             "label": "You",
+            "content_readiness": _content_readiness(target_site),
         }
     ]
 
@@ -1056,26 +1146,20 @@ def _build_competitor_scores(
     }
     for site in competitor_sites:
         label = site.get("label") or _brand_label(site.get("domain", ""))
-        mention_count = sum(
-            1
-            for prompt in prompts
-            if label in prompt.get("competitor_mentions", [])
-        )
-        page_strength = 0.45 if site.get("pages") else 0.0
-        comparison_bonus = 0.15 if _page_type_present(site, "comparison") else 0.0
-        review_bonus = 0.1 if _page_type_present(site, "reviews") else 0.0
-        competitor_score = round(
-            min(
-                100.0,
-                ((_safe_ratio(mention_count, total_prompts) * 0.65) + page_strength + comparison_bonus + review_bonus) * 100,
-            ),
-            1,
+        competitor_score = _score_entity_against_rivals(
+            entity_label=label,
+            entity_site=site,
+            rival_label=target_label,
+            headline=headline,
+            total_prompts=total_prompts,
+            bucket_weights=bucket_weights,
         )
         scores.append(
             {
                 "domain": label_to_domain.get(label) or site.get("domain"),
                 "score": competitor_score,
                 "label": label,
+                "content_readiness": _content_readiness(site),
             }
         )
 
