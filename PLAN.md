@@ -81,7 +81,7 @@ Source: public pages read October 7, 2026. Competitor claims below are theirs, n
 
 ### SEO versus GEO, in plain terms
 
-Anish's framing: rewriting site content is SEO; GEO is about presence on forums, reviews and third-party sources that live search pulls from. That is a good planning shorthand and matches the GEO playbook above. It is not a hard line: answer-shaped, quotable pages on the site still help AI answers, and third-party coverage usually does more. A rewrite alone is the weaker GEO lever.
+Anish's framing: rewriting site content is SEO; GEO is about presence on forums, reviews and third-party sources that live search pulls from. That is a good planning shorthand and matches the GEO playbook above. It is not a hard line: answer-shaped, quotable pages on the site still help AI answers, and third-party coverage usually does more. A rewrite alone is the weaker GEO lever. Current state: the fix engine only edits the client's own site. Third-party presence (Reddit, reviews, directories) is manual work or roadmap, not automated.
 
 ### Differentiator: hypotheses, not established
 
