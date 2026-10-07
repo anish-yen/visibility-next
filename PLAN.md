@@ -72,6 +72,26 @@ Practical work split: SEO combines keyword research, descriptive titles/headers,
 
 This is the intended optimization playbook, not a claim the current app automates all four steps or a newly scheduled 30-day run. Sources: [earned-media and engine differences study](https://arxiv.org/html/2509.08919v1); [practical evidence, entity consistency and measurement guidance](https://auspia.ai/blog/trust-based-geo-ai-citations).
 
+## Competitive context: Aeonza and the AEO market
+
+Source: public pages read October 7, 2026. Competitor claims below are theirs, not verified.
+
+- Aeonza (aeonza.com): two-person student agency founded 2026, "Answer Engine Optimization for Startups". Free audit as the hook, then a managed service to change content, authority signals and structure, with continuous re-testing. No public pricing. Claims 4 clients and results such as 11% to 64% AI visibility in 11 weeks; the case-study page did not load, so none of this is independently checked. It is the same audit-then-fix play Zeteum is aiming at, sold by hand.
+- Monitoring tools (Otterly, Peec, AthenaHQ, Profound) track mentions across engines, roughly $29 to $500 a month for the self-serve tiers; Profound now appears to be enterprise-only. Prices come from vendor pages and third-party roundups that disagree, so re-check before quoting. Agencies run from low hundreds to $15,000+ a month. Monitoring is commoditized and mostly does not fix anything.
+
+### SEO versus GEO, in plain terms
+
+Anish's framing: rewriting site content is SEO; GEO is about presence on forums, reviews and third-party sources that live search pulls from. That is a good planning shorthand and matches the GEO playbook above. It is not a hard line: answer-shaped, quotable pages on the site still help AI answers, and third-party coverage usually does more. A rewrite alone is the weaker GEO lever.
+
+### Differentiator: hypotheses, not established
+
+1. Honest measurement: unbranded-only headline score with raw prompts, answers and citations visible. Holds only after the scoring bug is fixed and a real answer engine is verified; the default audit today uses Gemini model knowledge.
+2. Audit, fix, re-measure in one loop. Code exists for the cycle path; end-to-end runtime is not verified.
+3. Price and self-serve for very small brands, between a $29 tool and a hand-sold agency.
+4. Gap: Zeteum does not yet do the third-party work (the bigger GEO lever); it only drafts posts for review. Aeonza's advantage today is people doing outreach and publishing case studies.
+
+Do not claim any of these publicly until the evidence in the checklist below exists.
+
 ## Intended improvement workflow
 
 1. Crawl target and competitors, respecting robots.txt and rate limits. Extract page types, positioning and verified facts.
@@ -144,3 +164,5 @@ At the start of code work, explicitly read `PLAN.md` alongside `CLAUDE.md` and r
 - October 7, 2026: created sanitized standing plan from Anish's project notes, September 25 measurement discussion, September 26 Aarav exchange, October 5 deployment handoff and fresh main-code inspection. No credentials or keys tab copied. No app logic changed.
 
 - October 7, 2026: added the GEO optimization playbook and 30-day same-prompt measurement checkpoint; clarified variability and evidence limits. Documentation only.
+
+- October 7, 2026: added Aeonza/AEO market context, the SEO versus GEO framing and unverified differentiator hypotheses. Documentation only.
