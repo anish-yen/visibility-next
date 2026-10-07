@@ -1,3 +1,13 @@
+# Working agreement (read first)
+
+Follow `PLAN.md` (repo root). It is the living plan for Zeteum: current state, priorities and next steps.
+
+- Read `PLAN.md` at the start of any session, before changing code.
+- Update `PLAN.md` as work proceeds, in the same commit as the change it describes: move finished items, record what was verified live vs inferred, and refresh next steps.
+- Touch only files relevant to the task. Do not regress anything that works. Branch first, verify before deploy.
+- Prompt or scoring changes: show Anish the prompts before pushing.
+- Never put credentials in `PLAN.md` or any committed file.
+
 AI Search Visibility Auditor — PRD + HLD
 
 Part 1: Product Requirements Document (PRD)
