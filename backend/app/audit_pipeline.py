@@ -708,18 +708,25 @@ def _tag_names_brand(
     target_site: dict[str, Any],
     competitor_sites: list[dict[str, Any]],
 ) -> None:
-    """Flag each prompt as branded if its text names the target OR any competitor."""
-    variants = list(
-        _brand_variants(
-            target_site.get("label") or _brand_label(target_site.get("domain", "")),
-            target_site.get("domain", ""),
-            target_site,
-        )
+    """Flag each prompt as unbranded, target-branded, or competitor-only.
+
+    Branded reference prompts exist to test whether answers stay accurate when
+    the buyer names OUR brand - so only a target mention counts as "branded"
+    for display/exclusion purposes. A prompt naming a competitor but never the
+    target (e.g. "is calendly worth it") tests nothing about our brand; it's
+    neither a clean unbranded buyer query nor a useful branded reference check,
+    and is dropped entirely in `_finalize_prompt_set`.
+    """
+    target_variants = _brand_variants(
+        target_site.get("label") or _brand_label(target_site.get("domain", "")),
+        target_site.get("domain", ""),
+        target_site,
     )
+    competitor_variants: list[str] = []
     for site in competitor_sites:
         if not site.get("domain"):
             continue
-        variants.extend(
+        competitor_variants.extend(
             _brand_variants(
                 site.get("label") or _brand_label(site.get("domain", "")),
                 site.get("domain", ""),
@@ -728,7 +735,10 @@ def _tag_names_brand(
         )
     for prompt in prompts:
         lowered = str(prompt.get("text", "")).lower()
-        prompt["names_brand"] = any(_find_brand(lowered, v) >= 0 for v in variants)
+        names_target = any(_find_brand(lowered, v) >= 0 for v in target_variants)
+        names_competitor = any(_find_brand(lowered, v) >= 0 for v in competitor_variants)
+        prompt["names_brand"] = names_target or names_competitor
+        prompt["names_competitor_only"] = names_competitor and not names_target
 
 
 def _finalize_prompt_set(
@@ -739,12 +749,14 @@ def _finalize_prompt_set(
     min_unbranded: int | None = None,
 ) -> list[dict[str, Any]]:
     """Tag branded prompts, cap how many survive, and optionally enforce a minimum
-    unbranded count. Branded prompts (naming the target or a competitor) make a
-    mention close to guaranteed, so they must never dominate the generated set or
-    the scored subset."""
+    unbranded count. Branded prompts (naming the target) make a mention close to
+    guaranteed, so they must never dominate the generated set or the scored
+    subset. Prompts naming only a competitor are dropped entirely - see
+    `_tag_names_brand`."""
     _tag_names_brand(cleaned, target_site, competitor_sites)
-    unbranded = [p for p in cleaned if not p.get("names_brand")]
-    branded = [p for p in cleaned if p.get("names_brand")]
+    usable = [p for p in cleaned if not p.get("names_competitor_only")]
+    unbranded = [p for p in usable if not p.get("names_brand")]
+    branded = [p for p in usable if p.get("names_brand")]
     if min_unbranded is not None and len(unbranded) < min_unbranded:
         raise GeminiError("Prompt generation returned too few usable unbranded prompts")
     return (unbranded + branded[:BRANDED_PROMPT_CAP])[:PROMPT_TARGET_MAX]
@@ -814,8 +826,12 @@ questions. The company and competitor names must NOT appear anywhere in these pr
 Before writing each one, silently check it does not contain "{target_distilled.get('label', '')}"
 or any competitor name - if it does, rewrite it without the name.
 
-PASS 2 (write 0 to 2 of these, no more): prompts that DO name the company or a competitor,
-like a buyer casually asking about it by name.
+PASS 2 (write 0 to 2 of these, no more): prompts that name YOUR OWN company,
+"{target_distilled.get('label', '')}", specifically - like a buyer casually asking
+about it by name. A comparison that also names a competitor is fine ("X vs Y
+reddit"), but every PASS 2 prompt must name your own company. Never write a
+PASS 2 prompt that names only a competitor and never your company - that tests
+nothing about your brand.
 
 Requirements for every prompt, both passes:
 - Each prompt must read like a real buyer typed it into an AI chat, not like a search-engine headline.

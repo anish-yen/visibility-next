@@ -7,6 +7,13 @@ roadmap planning") rather than things a real person types into an AI chat.
 Separately, `names_brand` only checked the target's own name, so prompts
 naming a competitor only (e.g. "best alternatives to jira") silently counted
 as "unbranded" and could inflate the headline visibility score.
+
+A later pass fixed a second bug in the same area: the "branded" reference
+bucket was generating prompts that name the COMPETITOR instead of the target
+(e.g. "is calendly worth it" on a cal.com audit). Branded prompts exist to
+test whether answers stay accurate when the buyer names OUR brand, so only
+target mentions should land in that bucket; a prompt naming only a competitor
+is dropped entirely rather than shown anywhere.
 """
 
 from types import SimpleNamespace
@@ -70,21 +77,65 @@ def test_rejects_seo_keyword_stacked_phrasing():
 # --- branded prompt tagging and capping ----------------------------------------------
 
 
-def test_tags_prompts_naming_target_or_competitor_as_branded():
+def test_tags_prompts_by_who_they_name():
     cleaned = [
         {"id": "1", "text": "is linear worth it", "intent": "trust"},
         {"id": "2", "text": "best alternatives to jira for small teams", "intent": "comparative"},
         {"id": "3", "text": "best issue tracker for a small team", "intent": "informational"},
-        {"id": "4", "text": "linear pricing plans explained", "intent": "pricing"},
+        {"id": "4", "text": "linear vs jira reddit", "intent": "comparative"},
     ]
     _tag_names_brand(cleaned, FULL_SITE, [COMPETITOR_SITE])
-    by_text = {p["text"]: p["names_brand"] for p in cleaned}
-    assert by_text["is linear worth it"] is True
-    assert by_text["best alternatives to jira for small teams"] is True, (
-        "a prompt naming only the competitor must still be tagged branded"
+    by_text = {p["text"]: p for p in cleaned}
+
+    assert by_text["is linear worth it"]["names_brand"] is True
+    assert by_text["is linear worth it"]["names_competitor_only"] is False
+
+    assert by_text["best alternatives to jira for small teams"]["names_brand"] is True
+    assert by_text["best alternatives to jira for small teams"]["names_competitor_only"] is True, (
+        "naming only the competitor (never the target) must be flagged competitor-only"
     )
-    assert by_text["best issue tracker for a small team"] is False
-    assert by_text["linear pricing plans explained"] is True
+
+    assert by_text["best issue tracker for a small team"]["names_brand"] is False
+    assert by_text["best issue tracker for a small team"]["names_competitor_only"] is False
+
+    # Names both - this is a valid "branded" comparison prompt, not competitor-only,
+    # because it also names the target.
+    assert by_text["linear vs jira reddit"]["names_brand"] is True
+    assert by_text["linear vs jira reddit"]["names_competitor_only"] is False
+
+
+def test_competitor_only_prompts_are_dropped_not_shown_as_branded():
+    """Reproduces the exact reported bug: a cal.com audit must not surface
+    "is calendly worth it" or "switch from calendly credit" as branded prompts -
+    they name only the competitor and test nothing about the target brand."""
+    cal_site = {
+        "domain": "cal.com",
+        "label": "Cal",
+        "pages": [{"url": "https://cal.com"}],
+        "page_type_counts": {"homepage": 1},
+    }
+    calendly_site = {
+        "domain": "calendly.com",
+        "label": "Calendly",
+        "pages": [{"url": "https://calendly.com"}],
+        "page_type_counts": {"homepage": 1},
+    }
+    cleaned = [
+        {"id": f"u{i}", "text": f"unbranded scheduling question number {i}", "intent": "informational"}
+        for i in range(PROMPT_TARGET_MIN)
+    ] + [
+        {"id": "b1", "text": "is cal worth it", "intent": "trust"},
+        {"id": "c1", "text": "is calendly worth it anymore", "intent": "comparative"},
+        {"id": "c2", "text": "switch from calendly credit", "intent": "transactional"},
+    ]
+    result = _finalize_prompt_set(cleaned, cal_site, [calendly_site])
+
+    texts = [p["text"] for p in result]
+    assert "is calendly worth it anymore" not in texts
+    assert "switch from calendly credit" not in texts
+    assert "is cal worth it" in texts
+    branded_kept = [p for p in result if p["names_brand"]]
+    assert all(p["text"] == "is cal worth it" for p in branded_kept)
 
 
 def test_caps_branded_prompts_in_final_set():
