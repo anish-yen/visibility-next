@@ -15,11 +15,16 @@ from app.services.gemini_client import GeminiClient, GeminiError
 
 PROMPT_TARGET_MIN = 8
 PROMPT_TARGET_MAX = 12
-# Ask Gemini for more raw candidates than the final target: the human-sounding
-# and branded-mention filters reject a meaningful share, so asking for exactly
-# PROMPT_TARGET_MAX leaves too little headroom to still clear PROMPT_TARGET_MIN
-# unbranded prompts after filtering.
-PROMPT_GENERATION_ASK_MAX = PROMPT_TARGET_MAX + 10
+# Ask Gemini for a few more raw candidates than the final target: the
+# human-sounding and branded-mention filters reject a meaningful share, so
+# asking for exactly PROMPT_TARGET_MAX leaves too little headroom to still
+# clear PROMPT_TARGET_MIN unbranded prompts after filtering. Kept modest
+# (not pushed higher) because a larger requested completion is itself a
+# likely contributor to production 503s on this call - the much smaller,
+# tightly-bounded category-refinement call (one 3-field object) succeeds
+# reliably while this call (a list of up to PROMPT_GENERATION_ASK_MAX
+# objects) was failing every attempt.
+PROMPT_GENERATION_ASK_MAX = PROMPT_TARGET_MAX + 4
 # The model consistently under-delivers on the "stay unbranded" instruction for
 # short, iconic product names (observed 3-6 of 10-12 raw prompts unbranded even
 # with explicit two-pass framing and a lowered temperature, on gemini-flash-lite).

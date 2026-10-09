@@ -68,8 +68,16 @@ class GeminiClient:
                     )
                     response.raise_for_status()
             except httpx.HTTPError as exc:
-                status = getattr(getattr(exc, "response", None), "status_code", None)
-                detail = f"HTTP {status}" if status is not None else type(exc).__name__
+                response_obj = getattr(exc, "response", None)
+                status = getattr(response_obj, "status_code", None)
+                body_text = ""
+                if response_obj is not None:
+                    try:
+                        body_text = response_obj.text[:500]
+                    except Exception:
+                        body_text = ""
+                detail = f"HTTP {status}: {body_text}" if status is not None else type(exc).__name__
+                print(f"GEMINI error (model={self.model}): {detail}", flush=True)
                 last_exc = GeminiError(f"Gemini request failed: {detail}")
                 if status == 429 and index < len(self.api_keys) - 1:
                     print("GEMINI key rate-limited, rotating to next configured key", flush=True)
