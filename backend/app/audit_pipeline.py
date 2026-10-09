@@ -6,6 +6,7 @@ import os
 import random
 import re
 import uuid
+import zlib
 from typing import Any
 
 from app import audit_store
@@ -14,7 +15,22 @@ from app.services.gemini_client import GeminiClient, GeminiError
 
 PROMPT_TARGET_MIN = 8
 PROMPT_TARGET_MAX = 12
+# Ask Gemini for more raw candidates than the final target: the human-sounding
+# and branded-mention filters reject a meaningful share, so asking for exactly
+# PROMPT_TARGET_MAX leaves too little headroom to still clear PROMPT_TARGET_MIN
+# unbranded prompts after filtering.
+PROMPT_GENERATION_ASK_MAX = PROMPT_TARGET_MAX + 10
+# The model consistently under-delivers on the "stay unbranded" instruction for
+# short, iconic product names (observed 3-6 of 10-12 raw prompts unbranded even
+# with explicit two-pass framing and a lowered temperature, on gemini-flash-lite).
+# PROMPT_TARGET_MIN is kept as the overall prompt-count target; this is a lower,
+# separately-tuned floor for the unbranded subset specifically, so a real but
+# imperfect generation still produces a usable (if smaller) scored sample instead
+# of failing outright. Re-check this number once run against the full model.
+MIN_UNBRANDED_PROMPTS = 4
 MAX_PROMPT_CHARS = 120
+BRANDED_PROMPT_CAP = 2
+WEAK_BUCKET_THRESHOLD = 0.65
 
 
 def _allow_heuristic_fallback() -> bool:
@@ -178,6 +194,43 @@ def _prompt_looks_polluted(text: str, blocked_fragments: list[str]) -> bool:
         if fragment and fragment in normalized and len(fragment.split()) >= 8:
             return True
     return False
+
+
+_BUYER_QUERY_STOPWORDS = {
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "do", "does",
+    "did", "to", "of", "for", "with", "in", "on", "at", "by", "so", "too",
+    "very", "many", "some", "any", "no", "not", "what", "how", "why", "which",
+    "who", "whose", "it", "its", "this", "that", "these", "those", "there",
+    "and", "or", "but", "if", "can", "could", "should", "would", "will",
+    "need", "needs", "want", "wants", "my", "your", "our", "their", "i", "we",
+    "you", "they", "me", "us", "them", "as", "than", "actually", "really",
+    "just", "out", "up", "vs",
+}
+
+
+def _looks_like_real_buyer_query(text: str) -> bool:
+    """Heuristic: would a real person plausibly type this into an AI chat?
+
+    Rejects SEO-keyword-stack phrasing - a long unbroken run of content words
+    with no connecting function word is the signature of a stitched-together
+    keyword phrase ("fast-growing software startups ... roadmap planning"),
+    something nobody actually types. Casual speech naturally breaks up nouns
+    and qualifiers with words like "is", "for", "to", "what".
+    """
+    words = _normalize_text(text).split()
+    if not words:
+        return False
+    if len(words) > 16:
+        return False
+    run = 0
+    max_run = 0
+    for word in words:
+        if word in _BUYER_QUERY_STOPWORDS:
+            run = 0
+        else:
+            run += 1
+            max_run = max(max_run, run)
+    return max_run < 5
 
 
 def _dedupe_prompts(prompts: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -537,9 +590,11 @@ def _sanitize_generated_prompts(
             continue
         if len(text.split()) < 4:
             continue
+        if not _looks_like_real_buyer_query(text):
+            continue
         cleaned.append({"id": str(uuid.uuid4()), "text": text, "intent": intent})
 
-    return _dedupe_prompts(cleaned)[:PROMPT_TARGET_MAX]
+    return _dedupe_prompts(cleaned)
 
 
 def _fallback_prompts(
@@ -573,12 +628,15 @@ def _fallback_prompts(
         competitor_distilled=competitor_distilled,
         check_blocked_fragments=False,
     )
-    return _ensure_prompt_coverage(
+    covered = _ensure_prompt_coverage(
         cleaned,
         state=state,
         target_distilled=target_distilled,
         competitor_distilled=competitor_distilled,
     )
+    # Best-effort fallback: tag and cap branded prompts, but don't raise if the
+    # unbranded count comes up short — there's no further fallback to try.
+    return _finalize_prompt_set(covered, target_site, competitor_sites)
 
 
 async def _refine_target_category_with_gemini(target_site: dict[str, Any]) -> None:
@@ -645,6 +703,65 @@ Website evidence:
     )
 
 
+def _tag_names_brand(
+    prompts: list[dict[str, Any]],
+    target_site: dict[str, Any],
+    competitor_sites: list[dict[str, Any]],
+) -> None:
+    """Flag each prompt as unbranded, target-branded, or competitor-only.
+
+    Branded reference prompts exist to test whether answers stay accurate when
+    the buyer names OUR brand - so only a target mention counts as "branded"
+    for display/exclusion purposes. A prompt naming a competitor but never the
+    target (e.g. "is calendly worth it") tests nothing about our brand; it's
+    neither a clean unbranded buyer query nor a useful branded reference check,
+    and is dropped entirely in `_finalize_prompt_set`.
+    """
+    target_variants = _brand_variants(
+        target_site.get("label") or _brand_label(target_site.get("domain", "")),
+        target_site.get("domain", ""),
+        target_site,
+    )
+    competitor_variants: list[str] = []
+    for site in competitor_sites:
+        if not site.get("domain"):
+            continue
+        competitor_variants.extend(
+            _brand_variants(
+                site.get("label") or _brand_label(site.get("domain", "")),
+                site.get("domain", ""),
+                site,
+            )
+        )
+    for prompt in prompts:
+        lowered = str(prompt.get("text", "")).lower()
+        names_target = any(_find_brand(lowered, v) >= 0 for v in target_variants)
+        names_competitor = any(_find_brand(lowered, v) >= 0 for v in competitor_variants)
+        prompt["names_brand"] = names_target or names_competitor
+        prompt["names_competitor_only"] = names_competitor and not names_target
+
+
+def _finalize_prompt_set(
+    cleaned: list[dict[str, Any]],
+    target_site: dict[str, Any],
+    competitor_sites: list[dict[str, Any]],
+    *,
+    min_unbranded: int | None = None,
+) -> list[dict[str, Any]]:
+    """Tag branded prompts, cap how many survive, and optionally enforce a minimum
+    unbranded count. Branded prompts (naming the target) make a mention close to
+    guaranteed, so they must never dominate the generated set or the scored
+    subset. Prompts naming only a competitor are dropped entirely - see
+    `_tag_names_brand`."""
+    _tag_names_brand(cleaned, target_site, competitor_sites)
+    usable = [p for p in cleaned if not p.get("names_competitor_only")]
+    unbranded = [p for p in usable if not p.get("names_brand")]
+    branded = [p for p in usable if p.get("names_brand")]
+    if min_unbranded is not None and len(unbranded) < min_unbranded:
+        raise GeminiError("Prompt generation returned too few usable unbranded prompts")
+    return (unbranded + branded[:BRANDED_PROMPT_CAP])[:PROMPT_TARGET_MAX]
+
+
 async def _generate_prompts_with_gemini(
     state: audit_store.AuditState,
     target_site: dict[str, Any],
@@ -669,43 +786,66 @@ async def _generate_prompts_with_gemini(
     )
 
     system_instruction = (
-        "You write buyer questions the way a real person actually types into an AI assistant, "
-        "logged out with no context: casual, direct, lowercase is fine, sometimes a bare search "
-        "phrase, sometimes a full question. The buyer is hunting for a tool or brand to solve "
-        "their use case but usually has NOT named a brand yet. Return JSON only. "
-        "Real examples of this register, actually typed by a human into ChatGPT: "
+        "You write short, casual buyer queries exactly the way real people type into an AI "
+        "chat or search box: logged out, no context, loose grammar, lowercase is common. "
+        "The buyer is hunting for a tool, sounds like an impatient person, not a marketer. "
+        "Return JSON only. "
+        "Almost every prompt must stay brand-agnostic - the buyer has NOT named a brand yet. "
+        "Real examples of this exact register, UNBRANDED, actually typed by humans: "
+        "\"best issue tracker for small team\", "
         "\"service that audits whether chatgpt mentions your product\", "
-        "\"alternatives to Profound for ai visibility\", "
+        "\"alternatives to profound for ai visibility\", "
         "\"how do i get my startup cited by ai chatbots\", "
-        "\"What is the best AI visibility tool for a B2B startup?\", "
-        "\"Profound vs Peec: which one tracks ChatGPT mentions better?\", "
-        "\"How do I get ChatGPT to recommend my SaaS product to buyers?\". "
-        "Vary length across the set: mix short 4-8 word fragments with full questions, and never "
-        "use the same opening shape twice. "
-        "Bad prompts are telegraphic template fragments like \"Acme for project planning\" or "
-        "\"best platform for payments apis\" - never write those. "
-        "Ground every prompt in what the company actually sells from the crawl evidence. "
+        "\"anyone know a good tool for tracking ai mentions\", "
+        "\"easiest way to track bugs without a ton of setup\", "
+        "\"any issue tracker that doesn't feel bloated\", "
+        "\"what do small dev teams actually use to manage tickets\". "
+        "Your final set should overwhelmingly look like THOSE - no brand name at all. Only "
+        "occasionally (at most 2 prompts total) is it OK to sound like these BRANDED examples "
+        "instead: \"is linear worth it\", \"linear vs jira reddit\". "
+        "Every prompt must pass this test: would a real person type this VERBATIM into an AI "
+        "chat? If it reads like a blog headline, an SEO keyword stack, or a stitched-together "
+        "list of qualifiers, rewrite it shorter and messier or drop it. "
+        "Vary length hard across the set: some prompts are 3-5 words, some are full questions, "
+        "never the same opening shape twice. "
+        "Bad prompts to never write: \"Acme for project planning\", \"best platform for payments "
+        "apis\", \"fast-growing software startups [x] for [y]\", or anything stacking more than "
+        "two descriptive qualifiers before a noun. "
+        "Ground every prompt in what the company actually sells from the crawl evidence, but say "
+        "it the way a buyer talks, not the way the website describes itself. "
         "Do not paste source text, titles, menus, taglines, or paragraphs from the website. "
         "Do not include explanations or any text outside the JSON object. "
         "Return strict JSON only."
     )
+    unbranded_target = PROMPT_TARGET_MIN + 2
     user_prompt = f"""
-Generate {PROMPT_TARGET_MIN} to {PROMPT_TARGET_MAX} natural prompts grounded in the distilled company context below.
+Generate prompts grounded in the distilled company context below, in two passes:
 
-Requirements:
-- Each prompt must read like a real buyer query someone would type into an AI assistant or search box.
-- Each prompt must be one sentence only.
-- Keep each prompt under {MAX_PROMPT_CHARS} characters.
-- Use the real brand/category language from the crawl, but do not copy long source text.
+PASS 1 (do this first, write at least {unbranded_target} of these): brand-agnostic buyer
+questions. The company and competitor names must NOT appear anywhere in these prompts.
+Before writing each one, silently check it does not contain "{target_distilled.get('label', '')}"
+or any competitor name - if it does, rewrite it without the name.
+
+PASS 2 (write 0 to 2 of these, no more): prompts that name YOUR OWN company,
+"{target_distilled.get('label', '')}", specifically - like a buyer casually asking
+about it by name. A comparison that also names a competitor is fine ("X vs Y
+reddit"), but every PASS 2 prompt must name your own company. Never write a
+PASS 2 prompt that names only a competitor and never your company - that tests
+nothing about your brand.
+
+Requirements for every prompt, both passes:
+- Each prompt must read like a real buyer typed it into an AI chat, not like a search-engine headline.
+- Each prompt must be one sentence or casual fragment only.
+- Keep each prompt under {MAX_PROMPT_CHARS} characters, and most should be well under 80.
+- Use the real brand/category language from the crawl, but say it the way a buyer talks - never stack more than two descriptive qualifiers before a noun.
 - Cover these areas across the full set: informational, comparative, pricing, trust/reviews, implementation/onboarding, and use-case queries.
-- Mostly unbranded: at most 2 prompts in the set may name the company or a competitor. Every other prompt must name NO brand at all - a brand-agnostic buyer question whose best answer would naturally mention them.
-- Vary length and shape: mix short fragments and full questions; no repeated openings like "how do i" more than twice.
-- BANNED shapes: "<Brand> for <use case>", "best platform for <use case>", "is <Brand> good for <use case>", or any prompt that reads like filled template slots.
+- Vary length hard: mix 3-6 word fragments, casual half-sentences, and full questions; no repeated openings like "how do i" more than twice.
+- BANNED shapes: "<Brand> for <use case>", "best platform for <use case>", "is <Brand> good for <use case>", "<adjective> <adjective> <noun> for <use case>", or any prompt that reads like filled template slots or a listicle title.
 - Avoid placeholders like "your market", "your product", or generic filler.
 - Avoid raw nav/menu text such as "Products Solutions Developers Resources Pricing".
 - Avoid pasting titles with separators like "|" or long taglines.
 - Include competitor names in at least one comparison question when a competitor is provided.
-- Prefer concrete buyer wording like "vs", "pricing", "alternatives", "how do I", "which tool", "worth it".
+- Prefer concrete, casual buyer wording like "vs", "worth it", "reddit", "anyone know", "too slow", "alternatives to".
 - No explanations, bullet points, or notes.
 
 Return JSON with this exact shape:
@@ -729,7 +869,7 @@ Competitor distilled context:
     data = await client.generate_json(
         system_instruction=system_instruction,
         user_prompt=user_prompt,
-        temperature=0.7,
+        temperature=0.4,
     )
     prompts = data.get("prompts")
     if not isinstance(prompts, list):
@@ -740,17 +880,12 @@ Competitor distilled context:
         target_distilled=target_distilled,
         competitor_distilled=competitor_distilled,
     )
-    if len(cleaned) < PROMPT_TARGET_MIN:
-        raise GeminiError("Prompt generation returned too few usable prompts")
-    variants = _brand_variants(
-        target_site.get("label") or _brand_label(target_site.get("domain", "")),
-        target_site.get("domain", ""),
+    return _finalize_prompt_set(
+        cleaned,
         target_site,
+        competitor_sites,
+        min_unbranded=MIN_UNBRANDED_PROMPTS,
     )
-    for prompt in cleaned[:PROMPT_TARGET_MAX]:
-        lowered = str(prompt.get("text", "")).lower()
-        prompt["names_brand"] = any(_find_brand(lowered, v) >= 0 for v in variants)
-    return cleaned[:PROMPT_TARGET_MAX]
 
 
 def _brand_variants(label: str, domain: str, site: dict[str, Any]) -> list[str]:
@@ -795,6 +930,49 @@ def _find_brand(lowered: str, variant: str) -> int:
         if not before.isalpha() and not after.isalpha():
             return idx
         start = idx + 1
+
+
+_CENTRAL_PHRASES = (
+    "target mentioned first among tracked brands",
+    "the answer opens with the target brand",
+    "target is the first brand named in the response",
+    "target leads the answer ahead of any competitor",
+)
+_SUPPORTING_PHRASES = (
+    "target mentioned after other brands",
+    "target shows up, but only after a competitor is named first",
+    "target appears later in the answer, not the lead pick",
+)
+_ABSENT_PHRASES = (
+    "target not mentioned",
+    "the answer never names the target brand",
+    "target brand is absent from this answer",
+)
+
+
+def _mention_explanation(
+    *,
+    prompt_id: str,
+    target_role: str,
+    competitor_mentions: list[str],
+    source_label: str,
+) -> str:
+    """Pick a naturally varied, deterministic phrase for this prompt's result.
+
+    Deterministic (hashed on prompt_id) so the same prompt always reads the same
+    way on reload, but different prompts in the same audit don't all repeat the
+    identical sentence.
+    """
+    bank = {
+        "central": _CENTRAL_PHRASES,
+        "supporting": _SUPPORTING_PHRASES,
+        "absent": _ABSENT_PHRASES,
+    }[target_role]
+    phrase = bank[zlib.crc32(prompt_id.encode("utf-8")) % len(bank)]
+    explanation = f"{source_label}: {phrase}"
+    if competitor_mentions:
+        explanation += f"; competitors mentioned: {', '.join(competitor_mentions)}"
+    return explanation + "."
 
 
 async def _evaluate_prompt(
@@ -870,15 +1048,12 @@ async def _evaluate_prompt(
         competitor_mentions=competitor_mentions,
     )
 
-    prominence_label = {
-        "central": "mentioned first among tracked brands",
-        "supporting": "mentioned after other brands",
-        "absent": "not mentioned",
-    }[target_role]
-    explanation = f"Real Gemini answer: target {prominence_label}"
-    if competitor_mentions:
-        explanation += f"; competitors mentioned: {', '.join(competitor_mentions)}"
-    explanation += "."
+    explanation = _mention_explanation(
+        prompt_id=prompt["id"],
+        target_role=target_role,
+        competitor_mentions=competitor_mentions,
+        source_label="Real Gemini answer",
+    )
 
     return {
         "id": prompt["id"],
@@ -976,6 +1151,94 @@ def _fallback_evaluation(
     }
 
 
+def _content_readiness(site: dict[str, Any]) -> float:
+    """Page-completeness signal, reported separately from the mention-based visibility score."""
+    return round(
+        min(
+            1.0,
+            (0.45 if site.get("pages") else 0.0)
+            + (0.15 if _page_type_present(site, "comparison") else 0.0)
+            + (0.1 if _page_type_present(site, "reviews") else 0.0),
+        )
+        * 100,
+        1,
+    )
+
+
+def _score_entity_against_rivals(
+    *,
+    entity_label: str,
+    entity_site: dict[str, Any],
+    rival_label: str,
+    headline: list[dict[str, Any]],
+    total_prompts: int,
+    bucket_weights: dict[str, float],
+) -> float:
+    """Score a competitor with the exact per-prompt formula and weights used for the target.
+
+    `competitor_mentions` on each prompt never includes the target (see `_evaluate_prompt`),
+    so the target's own mention role is reconstructed from the stored `target_role` to decide
+    whether this entity or the target was more prominent on that prompt.
+    """
+    scored_prompts: list[dict[str, Any]] = []
+    mentioned_count = 0
+    for prompt in headline:
+        competitor_mentions = prompt.get("competitor_mentions", [])
+        rivals_mentioned = [m for m in competitor_mentions if m != entity_label]
+        entity_rank = next(
+            (i for i, m in enumerate(competitor_mentions) if m == entity_label),
+            None,
+        )
+        target_role = prompt.get("score_components", {}).get("target_role", "absent")
+        target_mentioned = target_role != "absent"
+
+        if entity_rank is None:
+            entity_role = "absent"
+        elif target_role == "central":
+            entity_role = "supporting"
+        elif entity_rank == 0:
+            entity_role = "central"
+        else:
+            entity_role = "supporting"
+
+        rivals = ([rival_label] if target_mentioned else []) + rivals_mentioned
+        if not rivals:
+            rival_role = "none"
+        elif entity_role == "absent":
+            rival_role = "strong"
+        elif len(rivals) >= 2 and entity_role != "central":
+            rival_role = "strong"
+        else:
+            rival_role = "supporting"
+
+        fit_score = {"central": 0.85, "supporting": 0.55, "absent": 0.0}[entity_role]
+        score, _ = _compute_prompt_score(
+            target_role=entity_role,
+            competitor_role=rival_role,
+            fit_score=fit_score,
+            prompt=prompt,
+            target_site=entity_site,
+            competitor_mentions=rivals,
+        )
+        if entity_role != "absent":
+            mentioned_count += 1
+        scored_prompts.append({**prompt, "score": score})
+
+    average_prompt_score = _safe_ratio(sum(p["score"] for p in scored_prompts), total_prompts)
+    mention_rate = round(_safe_ratio(mentioned_count, total_prompts), 2)
+    bucket_scores = _bucket_average_scores(scored_prompts)
+    present_weight = sum(w for b, w in bucket_weights.items() if b in bucket_scores)
+    weighted_bucket_score = (
+        sum(bucket_scores[b] * w for b, w in bucket_weights.items() if b in bucket_scores) / present_weight
+        if present_weight
+        else 0.0
+    )
+    return round(
+        ((average_prompt_score * 0.55) + (mention_rate * 0.2) + (weighted_bucket_score * 0.25)) * 100,
+        1,
+    )
+
+
 def _build_competitor_scores(
     state: audit_store.AuditState,
     prompts: list[dict[str, Any]],
@@ -1041,11 +1304,13 @@ def _build_competitor_scores(
         1,
     )
 
+    target_label = target_site.get("label") or _brand_label(target_site.get("domain", ""))
     scores = [
         {
             "domain": state.primary_domain,
             "score": overall_score,
             "label": "You",
+            "content_readiness": _content_readiness(target_site),
         }
     ]
 
@@ -1056,26 +1321,20 @@ def _build_competitor_scores(
     }
     for site in competitor_sites:
         label = site.get("label") or _brand_label(site.get("domain", ""))
-        mention_count = sum(
-            1
-            for prompt in prompts
-            if label in prompt.get("competitor_mentions", [])
-        )
-        page_strength = 0.45 if site.get("pages") else 0.0
-        comparison_bonus = 0.15 if _page_type_present(site, "comparison") else 0.0
-        review_bonus = 0.1 if _page_type_present(site, "reviews") else 0.0
-        competitor_score = round(
-            min(
-                100.0,
-                ((_safe_ratio(mention_count, total_prompts) * 0.65) + page_strength + comparison_bonus + review_bonus) * 100,
-            ),
-            1,
+        competitor_score = _score_entity_against_rivals(
+            entity_label=label,
+            entity_site=site,
+            rival_label=target_label,
+            headline=headline,
+            total_prompts=total_prompts,
+            bucket_weights=bucket_weights,
         )
         scores.append(
             {
                 "domain": label_to_domain.get(label) or site.get("domain"),
                 "score": competitor_score,
                 "label": label,
+                "content_readiness": _content_readiness(site),
             }
         )
 
@@ -1106,7 +1365,10 @@ def _format_rationale(
     page_coverage_note: str,
     evidence_note: str | None = None,
 ) -> str:
-    rationale = f"{bucket_name.title()} prompts are weak ({bucket_score:.2f})"
+    if bucket_score < WEAK_BUCKET_THRESHOLD:
+        rationale = f"{bucket_name.title()} prompts are weak ({bucket_score:.2f})"
+    else:
+        rationale = f"{bucket_name.title()} prompt answers are solid ({bucket_score:.2f}), but page coverage is still thin"
     if page_coverage_note:
         rationale += f"; {page_coverage_note}"
     if evidence_note:

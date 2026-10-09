@@ -21,6 +21,7 @@ export type PromptRow = {
   score: number;
   intent?: string | null;
   explanation?: string | null;
+  names_brand?: boolean | null;
 };
 
 export type ContentBrief = {
