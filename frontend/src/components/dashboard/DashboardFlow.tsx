@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import {
-  createAudit,
   generateBrief,
   getAudit,
   listAudits,
+  startCheckout,
 } from "@/lib/api";
 import type { AuditDetail } from "@/types/audit";
 import { CompetitorBarChart } from "./CompetitorBarChart";
@@ -21,7 +21,7 @@ const STAGE_FLOW = [
   { key: "completed", label: "Done" },
 ] as const;
 
-type View = "create" | "running" | "dashboard";
+type View = "create" | "awaiting-payment" | "running" | "dashboard";
 
 function stageIndex(stage: string): number {
   const i = STAGE_FLOW.findIndex((s) => s.key === stage);
@@ -35,9 +35,26 @@ function formatBucketLabel(bucket: string): string {
 export function DashboardFlow() {
   const [sessionChecked, setSessionChecked] = useState(false);
   const [bootError, setBootError] = useState<string | null>(null);
-  const [loadingList, setLoadingList] = useState(true);
 
-  const [view, setView] = useState<View>("create");
+  const [checkoutParam, setCheckoutParam] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("checkout");
+  });
+  const [paymentTimedOut, setPaymentTimedOut] = useState(false);
+  // Snapshot, not state: once the awaiting-payment poll resolves it sets
+  // view directly, so the one-shot boot-list fetch below should stay
+  // skipped for the rest of this mount rather than re-firing (and flashing
+  // a loading screen over the just-resolved dashboard/running view).
+  const skipBootListFetch = useRef(checkoutParam === "success");
+
+  // The normal boot-list fetch is skipped while checkoutParam === "success"
+  // (the awaiting-payment poll effect takes over instead), so there's no
+  // list-loading spinner to wait out in that case.
+  const [loadingList, setLoadingList] = useState(() => checkoutParam !== "success");
+
+  const [view, setView] = useState<View>(
+    checkoutParam === "success" ? "awaiting-payment" : "create",
+  );
   const [activeAuditId, setActiveAuditId] = useState<string | null>(null);
   const [detail, setDetail] = useState<AuditDetail | null>(null);
   const [wantsNewAudit, setWantsNewAudit] = useState(false);
@@ -75,7 +92,23 @@ export function DashboardFlow() {
   }, []);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.has("checkout")) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("checkout");
+      url.searchParams.delete("session_id");
+      window.history.replaceState({}, "", url.toString());
+    }
+  }, []);
+
+  useEffect(() => {
     if (!sessionChecked) {
+      return;
+    }
+    // While awaiting-payment is resolving via its own poll below, don't let
+    // this one-shot list fetch race it back to the "create" view.
+    if (skipBootListFetch.current) {
       return;
     }
 
@@ -121,6 +154,45 @@ export function DashboardFlow() {
       cancelled = true;
     };
   }, [sessionChecked, wantsNewAudit]);
+
+  useEffect(() => {
+    if (!sessionChecked || view !== "awaiting-payment") return;
+
+    let cancelled = false;
+    let attempts = 0;
+    const maxAttempts = 20; // ~40s at 2s/attempt - the Stripe webhook usually lands in a couple of seconds
+
+    async function tick() {
+      attempts += 1;
+      try {
+        const list = await listAudits();
+        if (cancelled) return;
+        if (list.length > 0) {
+          const latest = list[0];
+          setActiveAuditId(latest.id);
+          setCheckoutParam(null);
+          setView(latest.status === "completed" ? "dashboard" : "running");
+          const d = await getAudit(latest.id);
+          if (!cancelled) setDetail(d);
+          clearInterval(intervalId);
+          return;
+        }
+      } catch {
+        /* keep polling - a transient failure here shouldn't give up early */
+      }
+      if (attempts >= maxAttempts) {
+        setPaymentTimedOut(true);
+        clearInterval(intervalId);
+      }
+    }
+
+    const intervalId = setInterval(() => void tick(), 2000);
+    void tick();
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
+  }, [sessionChecked, view]);
 
   useEffect(() => {
     if (!sessionChecked || !activeAuditId || view !== "running") return;
@@ -178,16 +250,22 @@ export function DashboardFlow() {
     const competitors = [c1, c2, c3].map((s) => s.trim()).filter(Boolean);
     setSubmitting(true);
     try {
-      const summary = await createAudit({
+      const res = await startCheckout({
         primary_domain: domain,
         competitor_domains: competitors,
         industry: industry.trim() || null,
       });
-      setWantsNewAudit(false);
-      setActiveAuditId(summary.id);
-      setView("running");
-      const d = await getAudit(summary.id);
-      setDetail(d);
+      if (res.bypassed && res.audit) {
+        setWantsNewAudit(false);
+        setActiveAuditId(res.audit.id);
+        setView("running");
+        const d = await getAudit(res.audit.id);
+        setDetail(d);
+      } else if (res.checkout_url) {
+        window.location.href = res.checkout_url;
+      } else {
+        setFormError("Could not start checkout.");
+      }
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Could not start audit");
     } finally {
@@ -268,6 +346,32 @@ export function DashboardFlow() {
 
   return (
     <div className="mx-auto max-w-5xl space-y-10 pb-20 pt-8">
+      {view === "awaiting-payment" ? (
+        <section className="rounded-2xl border border-neutral-200 bg-neutral-50 p-8 text-center">
+          <h2 className="text-xl font-semibold text-neutral-900">Payment confirmed</h2>
+          <p className="mt-2 text-sm text-neutral-500">
+            Starting your audit now — this usually takes a few seconds.
+          </p>
+          {paymentTimedOut ? (
+            <div className="mt-6 space-y-3">
+              <p className="text-sm text-amber-700">
+                Still waiting to hear back from payment confirmation. If this
+                persists, refresh the page.
+              </p>
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="rounded-lg bg-neutral-900 px-4 py-2 text-sm font-semibold text-white hover:bg-neutral-700"
+              >
+                Refresh
+              </button>
+            </div>
+          ) : (
+            <p className="mt-6 text-sm text-neutral-500">Checking…</p>
+          )}
+        </section>
+      ) : null}
+
       {view === "create" ? (
         <section className="rounded-2xl border border-neutral-200 bg-neutral-50 p-8">
           <h2 className="text-xl font-semibold text-neutral-900">Run an audit</h2>
@@ -276,6 +380,12 @@ export function DashboardFlow() {
             prompts, and simulate AI-style visibility (demo pipeline).
           </p>
           <form onSubmit={onSubmitAudit} className="mt-8 space-y-5">
+            {checkoutParam === "cancelled" ? (
+              <p className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                Checkout was cancelled — no charge was made. You can try again
+                below.
+              </p>
+            ) : null}
             {formError ? (
               <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
                 {formError}

@@ -6,3 +6,4 @@ httpx
 beautifulsoup4
 pydantic
 pydantic-settings
+stripe

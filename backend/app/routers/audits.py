@@ -1,23 +1,41 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
 from app import audit_pipeline, audit_store, cycle_store, loop_runner
+from app.config import get_settings
 from app.schemas_audit import (
     AuditCreateBody,
     AuditDetailOut,
     AuditSummaryOut,
     BriefResponse,
+    CheckoutResponseOut,
     CompetitorScoreOut,
     CycleSummaryOut,
     ContentBriefOut,
     PromptRowOut,
     RecommendationOut,
 )
+from app.services import stripe_client
+from app.services.stripe_client import StripeNotConfigured
 
 router = APIRouter(tags=["audits"])
+log = logging.getLogger(__name__)
+
+
+def _is_qa_whitelisted(request: Request) -> bool:
+    user = getattr(request.state, "user", None) or {}
+    email = str(user.get("email") or "").strip().lower()
+    return bool(email) and email in get_settings().qa_bypass_emails
+
+
+def _start_audit(user_id: str, primary_domain: str, competitor_domains: list[str], industry: str | None):
+    state = audit_store.create_audit(user_id, primary_domain, competitor_domains, industry)
+    asyncio.create_task(audit_pipeline.run_audit(state.id))
+    return state
 
 
 def _to_summary(a: audit_store.AuditState) -> AuditSummaryOut:
@@ -77,15 +95,81 @@ async def create_audit(request: Request, body: AuditCreateBody) -> AuditSummaryO
     uid = getattr(request.state, "user_id", None)
     if not uid:
         raise HTTPException(status_code=401, detail="Unauthorized")
+    if not _is_qa_whitelisted(request):
+        raise HTTPException(
+            status_code=402,
+            detail="Payment required. Start an audit through /checkout.",
+        )
 
-    state = audit_store.create_audit(
-        uid,
-        body.primary_domain,
-        body.competitor_domains,
-        body.industry,
-    )
-    asyncio.create_task(audit_pipeline.run_audit(state.id))
+    state = _start_audit(uid, body.primary_domain, body.competitor_domains, body.industry)
     return _to_summary(state)
+
+
+@router.post("/checkout", response_model=CheckoutResponseOut)
+async def start_checkout(request: Request, body: AuditCreateBody) -> CheckoutResponseOut:
+    """Single entry point the frontend uses to start an audit. QA-whitelisted
+    emails skip payment and get an audit immediately, same as the old direct
+    POST /audits flow; everyone else gets a Stripe Checkout URL to redirect
+    to - the audit itself is only created once the webhook below confirms
+    payment."""
+    uid = getattr(request.state, "user_id", None)
+    if not uid:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    if _is_qa_whitelisted(request):
+        state = _start_audit(uid, body.primary_domain, body.competitor_domains, body.industry)
+        return CheckoutResponseOut(bypassed=True, audit=_to_summary(state))
+
+    try:
+        checkout_url = stripe_client.create_audit_checkout_session(
+            user_id=uid,
+            primary_domain=body.primary_domain,
+            competitor_domains=body.competitor_domains,
+            industry=body.industry,
+        )
+    except StripeNotConfigured as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return CheckoutResponseOut(bypassed=False, checkout_url=checkout_url)
+
+
+@router.post("/webhooks/stripe", status_code=200)
+async def stripe_webhook(request: Request) -> dict:
+    """Stripe calls this directly (no Supabase auth - see middleware.py's
+    public-path exemption); authenticity comes from the signature check
+    inside parse_webhook_event, not from a bearer token."""
+    payload = await request.body()
+    signature = request.headers.get("stripe-signature", "")
+    try:
+        event = stripe_client.parse_webhook_event(payload, signature)
+    except StripeNotConfigured as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except Exception as exc:
+        log.warning("Stripe webhook signature verification failed: %s", exc)
+        raise HTTPException(status_code=400, detail="Invalid Stripe signature") from exc
+
+    if event["type"] in ("checkout.session.completed", "checkout.session.async_payment_succeeded"):
+        session = event["data"]["object"]
+        if session.get("payment_status") == "unpaid":
+            # Delayed-notification payment method: completed fired but the
+            # session hasn't actually been paid yet. async_payment_succeeded
+            # (or async_payment_failed) will follow later - fulfill then.
+            log.info("Stripe session %s completed but still unpaid; awaiting async result", session.get("id"))
+        else:
+            inputs = stripe_client.audit_inputs_from_session(session)
+            if inputs is None:
+                log.warning("Stripe session missing expected metadata: %s", session.get("id"))
+            else:
+                _start_audit(
+                    inputs["user_id"],
+                    inputs["primary_domain"],
+                    inputs["competitor_domains"],
+                    inputs["industry"],
+                )
+    elif event["type"] == "checkout.session.async_payment_failed":
+        session = event["data"]["object"]
+        log.info("Stripe checkout session payment failed: %s", session.get("id"))
+
+    return {"received": True}
 
 
 @router.get("/audits/{audit_id}", response_model=AuditDetailOut)

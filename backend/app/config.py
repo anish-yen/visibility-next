@@ -28,3 +28,12 @@ class Settings:
             if key.strip()
         ]
         self.gemini_model = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
+        self.stripe_secret_key = os.environ.get("STRIPE_SECRET_KEY", "")
+        self.stripe_webhook_secret = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+        self.stripe_price_id = os.environ.get("STRIPE_PRICE_ID", "")
+        self.frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000").rstrip("/")
+        self.qa_bypass_emails = {
+            email.strip().lower()
+            for email in os.environ.get("QA_BYPASS_EMAILS", "").split(",")
+            if email.strip()
+        }

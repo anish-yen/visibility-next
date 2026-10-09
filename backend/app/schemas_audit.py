@@ -58,6 +58,15 @@ class AuditSummaryOut(BaseModel):
     created_at: str
 
 
+class CheckoutResponseOut(BaseModel):
+    """Either the audit started immediately (QA bypass) or the caller must
+    redirect the browser to checkout_url to pay before it starts."""
+
+    bypassed: bool
+    audit: AuditSummaryOut | None = None
+    checkout_url: str | None = None
+
+
 class AuditDetailOut(AuditSummaryOut):
     industry: str | None
     competitor_domains: list[str]

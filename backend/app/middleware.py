@@ -7,7 +7,7 @@ from app.config import get_settings
 
 
 def _is_public_path(path: str) -> bool:
-    if path in ("/health", "/openapi.json"):
+    if path in ("/health", "/openapi.json", "/webhooks/stripe"):
         return True
     if path.startswith("/docs") or path.startswith("/redoc"):
         return True

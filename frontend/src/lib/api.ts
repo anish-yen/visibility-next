@@ -1,5 +1,5 @@
 import { createClient } from "@/lib/supabase/client";
-import type { AuditDetail, AuditSummary } from "@/types/audit";
+import type { AuditDetail, AuditSummary, CheckoutResponse } from "@/types/audit";
 
 const base = () =>
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "http://localhost:8000";
@@ -51,12 +51,12 @@ export function getAudit(id: string) {
   return apiFetch<AuditDetail>(`/audits/${id}`);
 }
 
-export function createAudit(body: {
+export function startCheckout(body: {
   primary_domain: string;
   competitor_domains: string[];
   industry: string | null;
 }) {
-  return apiFetch<AuditSummary>("/audits", {
+  return apiFetch<CheckoutResponse>("/checkout", {
     method: "POST",
     body: JSON.stringify(body),
   });

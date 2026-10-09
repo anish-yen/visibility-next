@@ -44,6 +44,12 @@ export type Recommendation = {
   brief: ContentBrief | null;
 };
 
+export type CheckoutResponse = {
+  bypassed: boolean;
+  audit: AuditSummary | null;
+  checkout_url: string | null;
+};
+
 export type AuditDetail = AuditSummary & {
   industry: string | null;
   competitor_domains: string[];
