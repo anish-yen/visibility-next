@@ -15,7 +15,9 @@ create table if not exists visibility_audits (
   recommendations jsonb not null default '[]',
   crawl_summary jsonb not null default '{}',
   created_at timestamptz not null,
-  error_message text
+  error_message text,
+  error_type text,
+  rewrite_artifacts jsonb not null default '[]'
 );
 create index if not exists visibility_audits_owner_created_idx
   on visibility_audits (user_id, created_at desc);

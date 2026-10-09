@@ -18,6 +18,7 @@ from app.schemas_audit import (
     ContentBriefOut,
     PromptRowOut,
     RecommendationOut,
+    RewriteArtifactOut,
 )
 from app.services import stripe_client
 from app.services.stripe_client import StripeNotConfigured
@@ -69,10 +70,12 @@ def _to_detail(a: audit_store.AuditState) -> AuditDetailOut:
             )
             for r in a.recommendations
         ],
+        rewrite_artifacts=[RewriteArtifactOut(**x) for x in a.rewrite_artifacts],
         crawl_summary=a.crawl_summary,
         weak_prompt_buckets=a.crawl_summary.get("weak_prompt_buckets", {}),
         score_components=a.crawl_summary.get("score_components", {}),
         error_message=a.error_message,
+        error_type=a.error_type,
     )
 
 

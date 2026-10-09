@@ -67,16 +67,31 @@ class CheckoutResponseOut(BaseModel):
     checkout_url: str | None = None
 
 
+class RewriteArtifactOut(BaseModel):
+    artifact_type: str
+    status: str
+    bucket: str | None = None
+    bucket_score: float | None = None
+    format: str | None = None
+    content: str | None = None
+    changes_vs_pattern: list[str] = Field(default_factory=list)
+    placeholders: list[str] = Field(default_factory=list)
+    grounded_in: list[str | None] = Field(default_factory=list)
+    error: str | None = None
+
+
 class AuditDetailOut(AuditSummaryOut):
     industry: str | None
     competitor_domains: list[str]
     competitor_scores: list[CompetitorScoreOut]
     prompts: list[PromptRowOut]
     recommendations: list[RecommendationOut]
+    rewrite_artifacts: list[RewriteArtifactOut] = Field(default_factory=list)
     crawl_summary: dict = Field(default_factory=dict)
     weak_prompt_buckets: dict = Field(default_factory=dict)
     score_components: dict = Field(default_factory=dict)
     error_message: str | None = None
+    error_type: str | None = None
 
 
 class BriefResponse(BaseModel):

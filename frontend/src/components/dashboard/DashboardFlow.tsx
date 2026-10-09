@@ -32,6 +32,23 @@ function formatBucketLabel(bucket: string): string {
   return bucket.replace(/_/g, " ");
 }
 
+const CONFIRM_PLACEHOLDER_RE = /(\[CONFIRM:[^\]]*\])/g;
+
+function renderWithConfirmPlaceholders(content: string) {
+  return content.split(CONFIRM_PLACEHOLDER_RE).map((part, i) =>
+    part.startsWith("[CONFIRM:") ? (
+      <mark
+        key={i}
+        className="rounded bg-amber-200 px-1 py-0.5 font-medium text-amber-900"
+      >
+        {part}
+      </mark>
+    ) : (
+      <span key={i}>{part}</span>
+    ),
+  );
+}
+
 export function DashboardFlow() {
   const [sessionChecked, setSessionChecked] = useState(false);
   const [bootError, setBootError] = useState<string | null>(null);
@@ -478,9 +495,19 @@ export function DashboardFlow() {
             {detail.primary_domain}
           </p>
           {detail.status === "failed" ? (
-            <p className="mt-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
-              {detail.error_message || "Audit failed."}
-            </p>
+            detail.error_type === "quota" ? (
+              <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                <p className="font-medium">Temporary capacity limit, not a bug</p>
+                <p className="mt-1">
+                  {detail.error_message ||
+                    "The AI engine's quota or rate limit was reached. Please try again later."}
+                </p>
+              </div>
+            ) : (
+              <p className="mt-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+                {detail.error_message || "Audit failed."}
+              </p>
+            )
           ) : null}
 
           <div className="mt-8">
@@ -746,6 +773,74 @@ export function DashboardFlow() {
                       ))}
                     </tbody>
                   </table>
+                </div>
+              </section>
+            ) : null}
+
+            {detail.rewrite_artifacts && detail.rewrite_artifacts.length > 0 ? (
+              <section className="rounded-2xl border border-neutral-200 bg-neutral-50 p-8">
+                <h3 className="text-lg font-semibold text-neutral-900">
+                  Rewrite drafts for your weakest areas
+                </h3>
+                <p className="mt-1 text-sm text-neutral-500">
+                  Evidence-grounded drafts for the prompt buckets where you scored weakest.
+                  Anything the crawl could not verify is marked{" "}
+                  <mark className="rounded bg-amber-200 px-1 py-0.5 font-medium text-amber-900">
+                    [CONFIRM: ...]
+                  </mark>{" "}
+                  — fill those in before publishing; everything else is ready to paste.
+                </p>
+                <div className="mt-6 space-y-6">
+                  {detail.rewrite_artifacts.map((artifact, idx) => (
+                    <div
+                      key={idx}
+                      className="rounded-xl border border-neutral-200 bg-neutral-50 p-5"
+                    >
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="rounded-full border border-neutral-300 bg-neutral-50 px-2.5 py-1 text-xs font-medium text-neutral-700 capitalize">
+                          {artifact.artifact_type.replace(/_/g, " ")}
+                        </span>
+                        {artifact.bucket ? (
+                          <span className="text-xs text-neutral-500">
+                            for weak {formatBucketLabel(artifact.bucket)}
+                            {artifact.bucket_score != null
+                              ? ` · ${artifact.bucket_score.toFixed(2)}`
+                              : ""}
+                          </span>
+                        ) : null}
+                      </div>
+                      {artifact.status !== "generated" ? (
+                        <p className="mt-3 text-sm text-neutral-500">
+                          Draft unavailable right now
+                          {artifact.error ? ` (${artifact.error})` : ""} — it will be
+                          retried on your next audit.
+                        </p>
+                      ) : (
+                        <>
+                          <pre className="mt-3 whitespace-pre-wrap font-sans text-sm leading-relaxed text-neutral-700">
+                            {renderWithConfirmPlaceholders(artifact.content || "")}
+                          </pre>
+                          {artifact.placeholders && artifact.placeholders.length > 0 ? (
+                            <div className="mt-4">
+                              <p className="text-xs font-medium uppercase tracking-wide text-neutral-500">
+                                Needs your confirmation
+                              </p>
+                              <ul className="mt-2 space-y-1">
+                                {artifact.placeholders.map((ph, i) => (
+                                  <li
+                                    key={i}
+                                    className="rounded bg-amber-50 px-2 py-1 text-xs text-amber-900"
+                                  >
+                                    {ph}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          ) : null}
+                        </>
+                      )}
+                    </div>
+                  ))}
                 </div>
               </section>
             ) : null}

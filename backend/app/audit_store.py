@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
@@ -34,6 +34,8 @@ class AuditState:
     crawl_summary: dict[str, Any]
     created_at: str
     error_message: str | None = None
+    error_type: str | None = None
+    rewrite_artifacts: list[dict[str, Any]] = field(default_factory=list)
 
 
 # In-memory storage is only for local development/tests without Supabase credentials.
@@ -95,7 +97,7 @@ def _save(audit: AuditState) -> None:
 
 def _from_row(row: dict[str, Any]) -> AuditState:
     values = {name: row.get(name) for name in AuditState.__dataclass_fields__}
-    for name in ("competitor_domains", "competitor_scores", "prompts", "recommendations"):
+    for name in ("competitor_domains", "competitor_scores", "prompts", "recommendations", "rewrite_artifacts"):
         values[name] = values[name] or []
     values["crawl_summary"] = values["crawl_summary"] or {}
     return AuditState(**values)
@@ -172,13 +174,14 @@ def update_progress(audit_id: str, *, stage: str, progress_percent: int) -> None
     _save(a)
 
 
-def fail_audit(audit_id: str, message: str) -> None:
+def fail_audit(audit_id: str, message: str, *, error_type: str | None = None) -> None:
     a = get(audit_id)
     if a is None:
         return
     a.status = "failed"
     a.stage = "failed"
     a.error_message = message
+    a.error_type = error_type
     a.progress_percent = 100
     _save(a)
 
@@ -192,6 +195,7 @@ def complete_audit(
     prompts: list[dict[str, Any]],
     recommendations: list[dict[str, Any]],
     crawl_summary: dict[str, Any],
+    rewrite_artifacts: list[dict[str, Any]] | None = None,
 ) -> None:
     a = get(audit_id)
     if a is None:
@@ -205,6 +209,7 @@ def complete_audit(
     a.prompts = prompts
     a.recommendations = recommendations
     a.crawl_summary = crawl_summary
+    a.rewrite_artifacts = rewrite_artifacts or []
     _save(a)
 
 

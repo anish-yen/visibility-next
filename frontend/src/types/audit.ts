@@ -44,6 +44,19 @@ export type Recommendation = {
   brief: ContentBrief | null;
 };
 
+export type RewriteArtifact = {
+  artifact_type: string;
+  status: string;
+  bucket?: string | null;
+  bucket_score?: number | null;
+  format?: string | null;
+  content?: string | null;
+  changes_vs_pattern?: string[];
+  placeholders?: string[];
+  grounded_in?: (string | null)[];
+  error?: string | null;
+};
+
 export type CheckoutResponse = {
   bypassed: boolean;
   audit: AuditSummary | null;
@@ -56,6 +69,7 @@ export type AuditDetail = AuditSummary & {
   competitor_scores: CompetitorScore[];
   prompts: PromptRow[];
   recommendations: Recommendation[];
+  rewrite_artifacts?: RewriteArtifact[];
   weak_prompt_buckets?: Record<string, number>;
   score_components?: {
     average_prompt_score?: number;
@@ -66,4 +80,5 @@ export type AuditDetail = AuditSummary & {
   };
   crawl_summary?: Record<string, unknown>;
   error_message: string | null;
+  error_type?: string | null;
 };

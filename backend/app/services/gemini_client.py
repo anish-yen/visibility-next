@@ -11,6 +11,10 @@ from app.config import get_settings
 class GeminiError(RuntimeError):
     """Raised when Gemini returns an unusable response."""
 
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
 
 def _extract_text(payload: dict[str, Any]) -> str:
     candidates = payload.get("candidates") or []
@@ -78,7 +82,7 @@ class GeminiClient:
                         body_text = ""
                 detail = f"HTTP {status}: {body_text}" if status is not None else type(exc).__name__
                 print(f"GEMINI error (model={self.model}): {detail}", flush=True)
-                last_exc = GeminiError(f"Gemini request failed: {detail}")
+                last_exc = GeminiError(f"Gemini request failed: {detail}", status_code=status)
                 if status == 429 and index < len(self.api_keys) - 1:
                     print("GEMINI key rate-limited, rotating to next configured key", flush=True)
                     continue

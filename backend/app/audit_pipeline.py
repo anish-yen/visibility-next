@@ -10,6 +10,7 @@ import zlib
 from typing import Any
 
 from app import audit_store
+from app.services import rewrite_engine
 from app.services.crawler import crawl_site, distill_site_context
 from app.services.gemini_client import GeminiClient, GeminiError
 
@@ -41,6 +42,34 @@ WEAK_BUCKET_THRESHOLD = 0.65
 def _allow_heuristic_fallback() -> bool:
     """Dev-only escape hatch: heuristic prompts/scores are never user-facing by default."""
     return os.environ.get("ALLOW_HEURISTIC_FALLBACK", "").strip().lower() in {"1", "true", "yes"}
+
+
+class AuditFailure(RuntimeError):
+    """A run_audit failure with a user-facing message AND a machine-readable
+    reason, so the dashboard can show a plain "quota, try again later" banner
+    instead of a generic failure message when that's what actually happened."""
+
+    def __init__(self, message: str, *, error_type: str = "generic") -> None:
+        super().__init__(message)
+        self.error_type = error_type
+
+
+def _audit_failure_for(exc: GeminiError, *, context: str) -> AuditFailure:
+    """Turn a terminal (post-retry) GeminiError into a user-facing failure,
+    distinguishing a real 429 quota/rate-limit from any other Gemini error."""
+    if getattr(exc, "status_code", None) == 429:
+        return AuditFailure(
+            f"Gemini's API quota or rate limit was reached while {context}. "
+            "No audit results were produced. This is a temporary capacity "
+            "limit, not a bug with your audit - please try again later "
+            "(quota limits typically reset within a few hours).",
+            error_type="quota",
+        )
+    return AuditFailure(
+        f"The AI engine hit a temporary error while {context}. No audit "
+        "results were produced. Please run the audit again in a few minutes.",
+        error_type="generic",
+    )
 
 
 async def _gemini_with_backoff(operation: Any, *, attempts: int, label: str) -> Any:
@@ -1505,6 +1534,68 @@ def _fallback_brief_body(
     )
 
 
+_BUCKET_ARTIFACT_TYPE = {
+    "informational": "faq_block",
+    "comparative": "comparison_page",
+    "pricing": "pricing_clarity_section",
+    "trust": "proof_section",
+}
+MAX_REWRITE_ARTIFACTS = 2  # each one is an extra Gemini call; keep this cheap
+
+
+async def _generate_rewrite_artifacts(
+    state: audit_store.AuditState,
+    target_site: dict[str, Any],
+    competitor_sites: list[dict[str, Any]],
+    prompt_results: list[dict[str, Any]],
+    weak_buckets: dict[str, float],
+) -> list[dict[str, Any]]:
+    """Evidence-driven rewrite drafts for the audit's weakest prompt buckets,
+    shown directly in the dashboard report (see rewrite_engine.py).
+
+    This reuses rewrite_engine, built for the real-engine cycle path, but
+    skips its live re-fetch of "winning" competitor pages - this ordinary
+    audit already crawled competitor_sites once, so their homepages double
+    as the structural evidence instead of a second round of network calls.
+    """
+    weak = sorted(
+        ((bucket, score) for bucket, score in weak_buckets.items() if score < WEAK_BUCKET_THRESHOLD),
+        key=lambda kv: kv[1],
+    )
+    if not weak:
+        return []
+
+    target_distilled = distill_site_context(target_site)
+    brand_label = target_site.get("label") or _brand_label(state.primary_domain)
+
+    winning_evidence: list[dict[str, Any]] = []
+    for site in competitor_sites:
+        if len(winning_evidence) >= rewrite_engine.MAX_EVIDENCE_PAGES:
+            break
+        pages = site.get("pages") or []
+        if pages:
+            winning_evidence.append(rewrite_engine._dissect_winning_page(pages[0]))
+
+    artifacts: list[dict[str, Any]] = []
+    for bucket, score in weak[:MAX_REWRITE_ARTIFACTS]:
+        artifact_type = _BUCKET_ARTIFACT_TYPE.get(bucket)
+        if not artifact_type:
+            continue
+        bucket_prompts = [p for p in prompt_results if _coverage_bucket(p) == bucket]
+        weak_prompts = bucket_prompts or sorted(prompt_results, key=lambda p: p.get("score", 0.0))[:8]
+        artifact = await rewrite_engine.generate_artifact(
+            artifact_type,
+            client_distilled=target_distilled,
+            weak_prompts=weak_prompts,
+            winning_evidence=winning_evidence,
+            brand_label=brand_label,
+        )
+        artifact["bucket"] = bucket
+        artifact["bucket_score"] = score
+        artifacts.append(artifact)
+    return artifacts
+
+
 def _generate_recommendations(
     state: audit_store.AuditState,
     target_site: dict[str, Any],
@@ -1787,11 +1878,7 @@ async def run_audit(audit_id: str) -> None:
             )
         except GeminiError as exc:
             if not _allow_heuristic_fallback():
-                raise RuntimeError(
-                    "The AI engine could not generate buyer prompts right now (rate limit or "
-                    "temporary error). No audit results were produced. Please run the audit "
-                    "again in a few minutes."
-                ) from exc
+                raise _audit_failure_for(exc, context="generating buyer prompts") from exc
             print(f"GEMINI prompt generation failed, using fallback prompts: {exc}", flush=True)
             prompts = _fallback_prompts(state, target_site, normalized_competitors)
             prompts_source = "fallback"
@@ -1812,11 +1899,7 @@ async def run_audit(audit_id: str) -> None:
                 )
             except GeminiError as exc:
                 if not _allow_heuristic_fallback():
-                    raise RuntimeError(
-                        "The AI engine was rate-limited mid-audit and could not finish the real "
-                        "evaluation. No partial results were produced. Please run the audit "
-                        "again in a few minutes."
-                    ) from exc
+                    raise _audit_failure_for(exc, context="evaluating prompts mid-audit") from exc
                 result = _fallback_evaluation(prompt, target_site, normalized_competitors)
                 fallback_evaluations += 1
             prompt_results.append(result)
@@ -1835,6 +1918,21 @@ async def run_audit(audit_id: str) -> None:
             normalized_competitors,
             prompt_results,
         )
+
+        weak_prompt_buckets = _bucket_average_scores(prompt_results)
+        audit_store.update_progress(audit_id, stage="analyzing", progress_percent=92)
+        try:
+            rewrite_artifacts = await _generate_rewrite_artifacts(
+                state,
+                target_site,
+                normalized_competitors,
+                prompt_results,
+                weak_prompt_buckets,
+            )
+        except GeminiError:
+            # Best-effort extra: a quota hit here should not fail an otherwise
+            # complete audit. The report just ships without rewrite drafts.
+            rewrite_artifacts = []
 
         crawl_summary = {
             "target": {
@@ -1855,7 +1953,7 @@ async def run_audit(audit_id: str) -> None:
                 for site in normalized_competitors
             ],
             "prompt_intent_scores": _summarize_prompt_weaknesses(prompt_results),
-            "weak_prompt_buckets": _bucket_average_scores(prompt_results),
+            "weak_prompt_buckets": weak_prompt_buckets,
             "prompt_count": len(prompt_results),
             "prompt_bucket_counts": _bucket_counts(prompt_results),
             "score_components": score_components,
@@ -1878,8 +1976,11 @@ async def run_audit(audit_id: str) -> None:
             prompts=prompt_results,
             recommendations=recommendations,
             crawl_summary=crawl_summary,
+            rewrite_artifacts=rewrite_artifacts,
         )
     except asyncio.CancelledError:
         raise
+    except AuditFailure as exc:
+        audit_store.fail_audit(audit_id, str(exc), error_type=exc.error_type)
     except Exception as exc:  # noqa: BLE001
         audit_store.fail_audit(audit_id, str(exc))
