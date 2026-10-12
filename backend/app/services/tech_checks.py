@@ -12,7 +12,7 @@ import json
 import re
 from typing import Any
 
-import httpx
+from app.services import safe_fetch
 
 _JSONLD_RE = re.compile(
     r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
@@ -23,8 +23,7 @@ _JSONLD_RE = re.compile(
 async def check_llms_txt(domain: str, *, timeout: float = 15.0) -> dict[str, Any]:
     url = f"https://{domain}/llms.txt"
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-            resp = await client.get(url)
+        resp = await safe_fetch.safe_get(url, timeout=timeout)
         if resp.status_code == 200 and len(resp.text) > 50:
             return {"check": "llms_txt", "passed": True, "detail": f"Found ({len(resp.text)} chars)", "url": url}
         return {"check": "llms_txt", "passed": False,

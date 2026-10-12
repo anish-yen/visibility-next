@@ -11,17 +11,26 @@ from fastapi.testclient import TestClient
 
 from app.config import get_settings
 from app.routers import audits as audits_router
+from app.services import safe_fetch
 from app.services.stripe_client import StripeNotConfigured
 
 
 @pytest.fixture(autouse=True)
 def _no_real_audit_pipeline(monkeypatch):
-    """_start_audit fires asyncio.create_task(audit_pipeline.run_audit(...)) -
-    stub it so these gating/webhook tests never crawl real domains or call Gemini."""
+    """Keep these gating/webhook tests entirely off the network.
+
+    Two separate leaks to plug: _start_audit fires
+    asyncio.create_task(audit_pipeline.run_audit(...)), and the endpoints run
+    _reject_non_public_domains, which resolves each submitted domain via DNS.
+    """
     async def fake_run_audit(audit_id):
         return None
 
+    async def fake_resolve(host: str) -> list[str]:
+        return ["93.184.216.34"]  # a public address: these domains are all valid here
+
     monkeypatch.setattr(audits_router.audit_pipeline, "run_audit", fake_run_audit)
+    monkeypatch.setattr(safe_fetch, "_resolve", fake_resolve)
 
 
 def _app(email="whitelisted@example.com", user_id="u1"):

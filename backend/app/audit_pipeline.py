@@ -1855,6 +1855,13 @@ async def run_audit(audit_id: str) -> None:
             else:
                 normalized_competitors.append(result)
 
+        if target_site.get("status") == "refused":
+            raise AuditFailure(
+                f"{state.primary_domain} is not a public website address, so it "
+                "cannot be audited. Enter the public domain you want to check "
+                "(for example acme.com).",
+                error_type="invalid_domain",
+            )
         if not target_site.get("pages"):
             raise RuntimeError(target_site.get("error") or "Target crawl failed")
 

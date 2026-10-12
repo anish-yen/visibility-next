@@ -79,11 +79,13 @@ Steps:
 **Problem:** the crawler will fetch user-supplied internal/loopback/metadata hosts and follows redirects with no public-address guard.
 **Evidence:** `backend/app/schemas_audit.py:4–14` + `backend/app/audit_store.py:37–43` accept `127.0.0.1:8000` and `169.254.169.254` (verified); `backend/app/services/crawler.py` builds `https://{normalized}` (`595–607`), `_fetch_html` follows redirects (`355–365`), `_can_fetch` returns `True` on any error/4xx (`341–352`).
 
+**Status: closed October 11, 2026** (`backend/app/services/safe_fetch.py`, 21 tests in `backend/tests/test_crawler_safety.py`). See the October 11 entry in `PLAN.md` for evidence and the one residual risk (DNS rebinding) that is documented rather than fixed.
+
 Steps:
-- [ ] **1.5.a** Validate the submitted domain: public DNS name only; reject IP literals, loopback, link-local, RFC1918, and metadata ranges **after** DNS resolution.
-- [ ] **1.5.b** Re-validate on every redirect hop (resolve-then-check), and cap redirects.
-- [ ] **1.5.c** Add a response body-size cap and total per-crawl byte/time budget.
-- [ ] **1.5.d** Acceptance + test: `backend/tests/test_crawler_safety.py` — loopback, `169.254.169.254`, and a public→internal redirect are all refused before any socket to the internal host.
+- [x] **1.5.a** Validate the submitted domain: public DNS name only; reject IP literals, loopback, link-local, RFC1918, and metadata ranges **after** DNS resolution. — `assert_public_url`; rejection test is `not is_global`, which also covers carrier-grade NAT (100.64/10) and IPv4-mapped IPv6. Also enforced pre-payment in `routers/audits.py` (`_reject_non_public_domains`, HTTP 400) so no one is charged for an audit that cannot run.
+- [x] **1.5.b** Re-validate on every redirect hop (resolve-then-check), and cap redirects. — `safe_get` runs its own redirect loop with `follow_redirects=False`, revalidating each hop; capped at `MAX_REDIRECTS = 3`.
+- [x] **1.5.c** Add a response body-size cap — streamed and aborted past `MAX_RESPONSE_BYTES` (2.5MB). **Not done:** a total per-crawl byte/time budget; per-response caps plus the existing `max_pages` bound the worst case loosely, but there is no aggregate budget.
+- [x] **1.5.d** Acceptance + test: `backend/tests/test_crawler_safety.py` — loopback, `169.254.169.254`, and a public→internal redirect are all refused before any socket to the internal host. — asserted by recording every host the transport is actually asked to connect to, not merely that an error was raised. Verified load-bearing: disabling the address check fails 11 of these tests, including the redirect case, which then does connect to `169.254.169.254`.
 
 ---
 

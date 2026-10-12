@@ -20,7 +20,8 @@ from app.schemas_audit import (
     RecommendationOut,
     RewriteArtifactOut,
 )
-from app.services import stripe_client
+from app.services import safe_fetch, stripe_client
+from app.services.safe_fetch import UnsafeURLError
 from app.services.stripe_client import StripeNotConfigured
 
 router = APIRouter(tags=["audits"])
@@ -31,6 +32,30 @@ def _is_qa_whitelisted(request: Request) -> bool:
     user = getattr(request.state, "user", None) or {}
     email = str(user.get("email") or "").strip().lower()
     return bool(email) and email in get_settings().qa_bypass_emails
+
+
+async def _reject_non_public_domains(body: AuditCreateBody) -> None:
+    """Refuse internal/loopback/metadata addresses up front.
+
+    The crawler refuses them anyway (see services/safe_fetch.py), but checking
+    here matters because payment gates audit creation: without it a user could
+    be charged for an audit that can never produce a result.
+    """
+    for domain in [body.primary_domain, *body.competitor_domains]:
+        normalized = audit_store.normalize_domain(domain)
+        if not normalized:
+            continue
+        try:
+            await safe_fetch.assert_public_url(f"https://{normalized}")
+        except UnsafeURLError as exc:
+            log.info("Rejected non-public submitted domain %r: %s", domain, exc)
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{domain} is not a public website address. Enter the public "
+                    "domain you want to audit (for example acme.com)."
+                ),
+            ) from exc
 
 
 def _start_audit(user_id: str, primary_domain: str, competitor_domains: list[str], industry: str | None):
@@ -104,6 +129,7 @@ async def create_audit(request: Request, body: AuditCreateBody) -> AuditSummaryO
             detail="Payment required. Start an audit through /checkout.",
         )
 
+    await _reject_non_public_domains(body)
     state = _start_audit(uid, body.primary_domain, body.competitor_domains, body.industry)
     return _to_summary(state)
 
@@ -118,6 +144,8 @@ async def start_checkout(request: Request, body: AuditCreateBody) -> CheckoutRes
     uid = getattr(request.state, "user_id", None)
     if not uid:
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+    await _reject_non_public_domains(body)
 
     if _is_qa_whitelisted(request):
         state = _start_audit(uid, body.primary_domain, body.competitor_domains, body.industry)

@@ -503,6 +503,14 @@ export function DashboardFlow() {
                     "The AI engine's quota or rate limit was reached. Please try again later."}
                 </p>
               </div>
+            ) : detail.error_type === "invalid_domain" ? (
+              <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                <p className="font-medium">That address can&apos;t be audited</p>
+                <p className="mt-1">
+                  {detail.error_message ||
+                    "Enter the public domain you want to check (for example acme.com)."}
+                </p>
+              </div>
             ) : (
               <p className="mt-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
                 {detail.error_message || "Audit failed."}

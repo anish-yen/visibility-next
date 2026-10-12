@@ -10,6 +10,9 @@ import re
 import httpx
 from bs4 import BeautifulSoup
 
+from app.services import safe_fetch
+from app.services.safe_fetch import UnsafeURLError
+
 
 PAGE_TYPE_PATTERNS: list[tuple[str, tuple[str, ...]]] = [
     ("pricing", ("pricing", "plans", "plan", "cost")),
@@ -342,12 +345,15 @@ async def _can_fetch(base_url: str, target_url: str) -> bool:
     robots_url = urljoin(base_url, "/robots.txt")
     parser = RobotFileParser()
     try:
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-            response = await client.get(robots_url)
-        if response.status_code >= 400:
+        result = await safe_fetch.safe_get(robots_url, timeout=10.0)
+        if result.status_code >= 400:
             return True
-        parser.parse(response.text.splitlines())
+        parser.parse(result.text.splitlines())
         return parser.can_fetch("VisibilityAuditor", target_url)
+    except UnsafeURLError:
+        # A non-public robots.txt host means the page fetch will be refused
+        # too; don't report it as "allowed" and let the caller discover that.
+        raise
     except Exception:
         return True
 
@@ -359,10 +365,14 @@ async def _fetch_html(url: str) -> str:
             "+https://localhost)"
         )
     }
-    async with httpx.AsyncClient(timeout=20.0, follow_redirects=True, headers=headers) as client:
-        response = await client.get(url)
-        response.raise_for_status()
-        return response.text
+    result = await safe_fetch.safe_get(url, timeout=20.0, headers=headers)
+    if result.status_code >= 400:
+        raise httpx.HTTPStatusError(
+            f"HTTP {result.status_code} for {url}",
+            request=httpx.Request("GET", url),
+            response=httpx.Response(result.status_code),
+        )
+    return result.text
 
 
 def _extract_page(url: str, html: str) -> dict[str, Any]:
@@ -609,13 +619,20 @@ async def crawl_site(domain: str, *, max_pages: int = 6) -> dict[str, Any]:
     last_error: str | None = None
     start_url: str | None = None
 
+    refused = False
     for candidate in homepage_candidates:
-        if not await _can_fetch(candidate, candidate):
-            last_error = f"robots.txt disallows crawling {candidate}"
-            continue
         try:
+            if not await _can_fetch(candidate, candidate):
+                last_error = f"robots.txt disallows crawling {candidate}"
+                continue
             await _fetch_html(candidate)
             start_url = candidate
+            break
+        except UnsafeURLError as exc:
+            # Non-public address: the http:// candidate resolves the same way,
+            # so stop here rather than probing it too.
+            last_error = str(exc)
+            refused = True
             break
         except Exception as exc:  # noqa: BLE001
             last_error = str(exc)
@@ -624,7 +641,7 @@ async def crawl_site(domain: str, *, max_pages: int = 6) -> dict[str, Any]:
         return {
             "domain": normalized,
             "label": _domain_label(normalized),
-            "status": "failed",
+            "status": "refused" if refused else "failed",
             "error": last_error or "Could not fetch homepage",
             "pages": [],
             "page_type_counts": {},
@@ -641,12 +658,16 @@ async def crawl_site(domain: str, *, max_pages: int = 6) -> dict[str, Any]:
         if url in seen:
             continue
         seen.add(url)
-        if not await _can_fetch(start_url, url):
-            errors.append(f"Robots blocked {url}")
-            continue
-
         try:
+            if not await _can_fetch(start_url, url):
+                errors.append(f"Robots blocked {url}")
+                continue
             html = await _fetch_html(url)
+        except UnsafeURLError as exc:
+            # One discovered link pointing somewhere non-public (or a redirect
+            # into private space) drops that page, not the whole crawl.
+            errors.append(f"{url}: refused ({exc})")
+            continue
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{url}: {exc}")
             continue
