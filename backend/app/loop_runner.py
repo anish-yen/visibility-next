@@ -108,6 +108,18 @@ async def run_cycle(
     *,
     engines: tuple[str, ...] = DEFAULT_ENGINES,
 ) -> dict[str, Any]:
+    # Opt-in delegation to the LangGraph implementation of the same workflow
+    # (app/graph/loop_graph.py). Default is this legacy loop; the graph adds
+    # the validate / human-review / independent-retest steps this function
+    # does not have. Imported lazily so the backend still works where
+    # langgraph is not installed.
+    from app.graph.loop_graph import graph_engine_selected
+
+    if graph_engine_selected():
+        from app.graph.loop_graph import run_graph_cycle
+
+        return await run_graph_cycle(audit_id, engines=engines)
+
     state = audit_store.get(audit_id)
     if not state:
         raise RuntimeError(f"audit {audit_id} not found")

@@ -7,3 +7,10 @@ beautifulsoup4
 pydantic
 pydantic-settings
 stripe
+# Agentic loop graph (app/graph), opt-in via ZETEUM_LOOP_ENGINE=graph.
+# Pinned to the versions verified to install and import on Python 3.14.7.
+# psycopg[binary] ships a prebuilt libpq; plain psycopg fails at import with
+# "no pq wrapper available" on this machine.
+langgraph==1.2.16
+langgraph-checkpoint-postgres==3.2.0
+psycopg[binary]==3.3.6
