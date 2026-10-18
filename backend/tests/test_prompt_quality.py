@@ -24,6 +24,8 @@ from app.audit_pipeline import (
     GeminiError,
     _finalize_prompt_set,
     _looks_like_real_buyer_query,
+    _short_descriptor,
+    _prompt_looks_polluted,
     _mention_explanation,
     _tag_names_brand,
 )
@@ -72,6 +74,122 @@ def test_rejects_seo_keyword_stacked_phrasing():
     ]
     for text in bad_examples:
         assert not _looks_like_real_buyer_query(text), f"should reject: {text!r}"
+
+
+def test_accepts_category_shopping_queries_with_longer_content_runs():
+    """Measured false positives on a real posthog.com run.
+
+    The keyword-stack guard counted any run of 5+ non-stopword words as a
+    stack, but its function-word list was missing ordinary words like
+    "without", "from", "anyone" and "using". That systematically rejected the
+    exact unbranded category queries this product exists to test, while short
+    branded prompts ("posthog vs amplitude reddit") sailed through - so the
+    surviving set skewed branded and the unbranded floor kept failing.
+    """
+    good_examples = [
+        "best product analytics tool for a startup",
+        "easiest way to track user drop off without massive setup",
+        "cheap session replay tool for a small saas team",
+        "what do dev teams use to analyze conversion rates",
+        "which analytics tool should i use for my mobile app",
+        "anyone know a good product analytics tool for early stage saas",
+        "how much should i expect to pay for product analytics",
+    ]
+    for text in good_examples:
+        assert _looks_like_real_buyer_query(text), f"should accept: {text!r}"
+
+
+def test_still_rejects_noun_phrase_stacks_after_widening_the_stopword_list():
+    """The widened function-word list must not re-admit keyword stacks. These
+    are product-description noun phrases, not anything a person types."""
+    bad_examples = [
+        "enterprise grade product analytics experimentation platform software",
+        "scalable product analytics experimentation feature management platform",
+        "can ai tools generate bug fixes from usage data",
+    ]
+    for text in bad_examples:
+        assert not _looks_like_real_buyer_query(text), f"should reject: {text!r}"
+
+
+def test_vendor_capability_echo_is_a_generation_concern_not_a_filter_one():
+    """Documents a real limitation rather than over-fitting the filter.
+
+    PostHog's homepage says it "automatically diagnoses problems, fixes bugs,
+    and generates pull requests", and on a live run the model echoed that back
+    as supposed buyer queries - the complaint being fixed. But structurally
+    "anyone using X that writes Y" is ordinary speech; only its MEANING marks
+    it as vendor copy. Making the run-length guard reject it would restore the
+    over-aggression that was dropping real category queries, so this register
+    is suppressed by the generation instructions instead. Asserting the
+    filter's blind spot keeps that division of labour honest: if someone later
+    makes this pass the filter, they should know it was never the filter's job.
+    """
+    assert _looks_like_real_buyer_query(
+        "anyone using product analytics tools that write pull requests"
+    ), "structural guard cannot and should not judge semantic vendor-copy echo"
+
+
+def test_single_nav_word_in_a_natural_question_is_not_treated_as_menu_text():
+    """"support", "pricing" and "docs" are nav labels but also ordinary buyer
+    vocabulary. Matching any ONE of them dropped legitimate pricing and trust
+    queries, skewing those buckets toward no coverage."""
+    keepers = [
+        "are people actually happy with posthog support",
+        "how much does posthog cost compared to amplitude pricing",
+        "are the docs good enough to self serve",
+    ]
+    for text in keepers:
+        assert not _prompt_looks_polluted(text, []), f"should keep: {text!r}"
+
+
+def test_scraped_navigation_menu_text_is_still_rejected():
+    assert _prompt_looks_polluted("Products Solutions Developers Resources Pricing", [])
+    assert _prompt_looks_polluted("docs pricing login contact company", [])
+
+
+def test_rejects_prompts_that_copy_the_sites_own_marketing_phrasing():
+    """A buyer choosing a tool types the category ("product analytics"), not
+    the vendor's tagline ("your product's context layer"). Verbatim multi-word
+    lifts from the crawled summary/keywords are vendor copy, not buyer speech.
+    """
+    blocked = [
+        "your product s context layer",
+        "product analytics and experimentation platform",
+        "give agents product context",
+    ]
+    assert _prompt_looks_polluted("is your product s context layer worth it", blocked)
+    assert _prompt_looks_polluted("best product analytics and experimentation platform", blocked)
+
+
+def test_category_words_themselves_stay_usable_in_buyer_queries():
+    """The guard must block copied phrases, not the category noun itself -
+    buyers really do type "product analytics"."""
+    blocked = ["product analytics and experimentation platform", "product analytics"]
+    assert not _prompt_looks_polluted("best product analytics tool for a startup", blocked)
+    assert not _prompt_looks_polluted("cheapest product analytics for early stage", blocked)
+
+
+def test_buyer_descriptor_rejects_scraped_marketing_sentences():
+    """The category/buyer strings get interpolated into the generation
+    instructions as the shape to imitate, so they must be short descriptors.
+
+    When the Gemini category refinement fails, run_audit logs it and carries on
+    with the heuristic distillation - where `audiences[0]` for posthog.com is
+    the scraped banner "Join 500,000+ teams already shipping with PostHog".
+    Interpolating that would instruct the model to write
+    "best <category> for Join 500,000+ teams already shipping with PostHog",
+    injecting the exact vendor copy this change exists to remove, and leaking
+    the brand into prompts that are supposed to be unbranded.
+    """
+    assert _short_descriptor("software product teams", "Posthog") == "software product teams"
+    assert _short_descriptor("product analytics", "Posthog") == "product analytics"
+
+    assert _short_descriptor("Join 500,000+ teams already shipping with PostHog", "Posthog") == ""
+    assert _short_descriptor("The single platform for engineers to analyze, test, observe", "Posthog") == ""
+    # must never hand back something naming the brand: these instructions
+    # drive the UNBRANDED pass
+    assert _short_descriptor("posthog users", "Posthog") == ""
+    assert _short_descriptor("", "Posthog") == ""
 
 
 # --- branded prompt tagging and capping ----------------------------------------------

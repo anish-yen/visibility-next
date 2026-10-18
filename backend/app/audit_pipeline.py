@@ -214,7 +214,14 @@ def _prompt_looks_polluted(text: str, blocked_fragments: list[str]) -> bool:
         return True
     if text.count("|") > 0 or text.count("...") > 0 or text.count(":") > 1:
         return True
-    if any(term in normalized for term in NAV_TERMS) and len(normalized.split()) <= 12:
+    # Scraped menu text looks like "Products Solutions Developers Resources
+    # Pricing" - several nav labels in a row. Matching a single one as a
+    # substring also killed legitimate buyer questions, because "pricing",
+    # "support" and "docs" are ordinary buyer vocabulary ("are people actually
+    # happy with posthog support"), which silently emptied the pricing and
+    # trust buckets. Require two or more, matched as whole words.
+    nav_words = set(normalized.split()) & NAV_TERMS
+    if len(nav_words) >= 2 and len(normalized.split()) <= 12:
         return True
     if _has_repeated_phrase(text):
         return True
@@ -224,8 +231,13 @@ def _prompt_looks_polluted(text: str, blocked_fragments: list[str]) -> bool:
         return True
     if sum(text.count(ch) for ch in "|/<>") >= 2:
         return True
+    # Verbatim lifts from the site's own summary/keywords are vendor copy, not
+    # buyer speech. The old threshold of 8+ words only caught whole sentences,
+    # so taglines like "your product's context layer" passed straight through
+    # and became "buyer" prompts. 4+ words still leaves the bare category
+    # usable, which matters because buyers really do type "product analytics".
     for fragment in blocked_fragments:
-        if fragment and fragment in normalized and len(fragment.split()) >= 8:
+        if fragment and fragment in normalized and len(fragment.split()) >= 4:
             return True
     return False
 
@@ -239,7 +251,42 @@ _BUYER_QUERY_STOPWORDS = {
     "need", "needs", "want", "wants", "my", "your", "our", "their", "i", "we",
     "you", "they", "me", "us", "them", "as", "than", "actually", "really",
     "just", "out", "up", "vs",
+    # Ordinary function words that were missing, which made the run-length
+    # guard below fire on genuine buyer queries ("easiest way to track user
+    # drop off without massive setup"). Deliberately excludes content-ish
+    # words like "use"/"instead"/"best": those carry the keyword-stack
+    # phrasing the guard exists to reject, so stopwording them would let
+    # stacks back in.
+    "without", "off", "from", "into", "about", "when", "where", "while",
+    "anyone", "anybody", "someone", "else", "own", "per", "via", "down",
+    "over", "under", "after", "before", "around", "between", "only",
 }
+
+
+def _short_descriptor(value: str, brand_label: str) -> str:
+    """Keep a category/buyer string only if it is a terse descriptor.
+
+    These strings get interpolated into the generation instructions as the
+    shape to imitate, so a scraped marketing sentence poisons every prompt.
+    When the Gemini category refinement fails, run_audit continues with the
+    heuristic distillation, where the "audience" can be a page banner like
+    "Join 500,000+ teams already shipping with PostHog". Returns "" when the
+    value is unusable, and callers fall back to "infer it from the evidence".
+    """
+    cleaned = " ".join(str(value or "").split())
+    if not (3 <= len(cleaned) <= 60):
+        return ""
+    if len(cleaned.split()) > 6:
+        return ""
+    if any(ch.isdigit() for ch in cleaned):
+        return ""
+    if any(ch in cleaned for ch in "|:+/<>"):
+        return ""
+    # These instructions drive the UNBRANDED pass, so never echo the brand.
+    label = _normalize_text(brand_label)
+    if label and label in _normalize_text(cleaned):
+        return ""
+    return cleaned
 
 
 def _looks_like_real_buyer_query(text: str) -> bool:
@@ -848,17 +895,42 @@ async def _generate_prompts_with_gemini(
         "Ground every prompt in what the company actually sells from the crawl evidence, but say "
         "it the way a buyer talks, not the way the website describes itself. "
         "Do not paste source text, titles, menus, taglines, or paragraphs from the website. "
+        "CRITICAL: the crawl evidence below is the vendor's own marketing copy. Treat it only as "
+        "a clue to WHICH CATEGORY of tool this is. An unbranded buyer has never seen this website "
+        "and cannot know its slogans, product names, or feature wording, so never echo or "
+        "paraphrase the vendor's taglines or capability claims. If the site says it "
+        "\"automatically diagnoses problems and generates pull requests\", the buyer does not type "
+        "\"tool that diagnoses problems and writes pull requests\" - they type the CATEGORY they "
+        "are shopping for, like \"best product analytics tool for a startup\". Shop the category, "
+        "do not recite the brochure. "
         "Do not include explanations or any text outside the JSON object. "
         "Return strict JSON only."
     )
     unbranded_target = PROMPT_TARGET_MIN + 2
+    brand_label = target_distilled.get("label", "")
+    buyer_category = _short_descriptor(
+        target_distilled.get("category") or target_distilled.get("product_category") or "",
+        brand_label,
+    )
+    audiences = target_distilled.get("audiences") or []
+    buyer_customer = _short_descriptor(audiences[0] if audiences else "", brand_label)
     user_prompt = f"""
+The category being shopped: {buyer_category or "infer it from the evidence below"}
+The buyer: {buyer_customer or "infer who buys this from the evidence below"}
+
 Generate prompts grounded in the distilled company context below, in two passes:
 
 PASS 1 (do this first, write at least {unbranded_target} of these): brand-agnostic buyer
-questions. The company and competitor names must NOT appear anywhere in these prompts.
+questions from someone comparing options in the category named above, who has never
+heard of this company. Anchor these on that category and that buyer - the way they would
+describe what they need in their own words. The canonical shape to aim for is
+"best {buyer_category or '<category>'} for {buyer_customer or '<buyer>'}" and natural
+variations of it (price, trust, ease of setup, comparisons, specific use cases).
+The company and competitor names must NOT appear anywhere in these prompts.
 Before writing each one, silently check it does not contain "{target_distilled.get('label', '')}"
 or any competitor name - if it does, rewrite it without the name.
+Also check it is not a reworded version of the vendor's own feature or tagline copy; if it
+is, replace it with a question about the category instead.
 
 PASS 2 (write 0 to 2 of these, no more): prompts that name YOUR OWN company,
 "{target_distilled.get('label', '')}", specifically - like a buyer casually asking
