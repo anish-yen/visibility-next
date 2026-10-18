@@ -32,6 +32,24 @@ function formatBucketLabel(bucket: string): string {
   return bucket.replace(/_/g, " ");
 }
 
+/** The answer the score was derived from, collapsed by default: it's the
+ *  evidence behind a prompt's score, but it's long enough to bury the table
+ *  if every row expanded at once. */
+function AnswerDisclosure({ answer }: { answer?: string | null }) {
+  if (!answer?.trim()) return null;
+  return (
+    <details className="group mt-2">
+      <summary className="cursor-pointer list-none text-xs font-medium text-indigo-700 hover:underline">
+        <span className="group-open:hidden">Show AI answer</span>
+        <span className="hidden group-open:inline">Hide AI answer</span>
+      </summary>
+      <div className="mt-2 max-w-xl whitespace-pre-wrap rounded-lg border border-neutral-200 bg-white p-3 text-xs leading-relaxed text-neutral-700">
+        {answer}
+      </div>
+    </details>
+  );
+}
+
 const CONFIRM_PLACEHOLDER_RE = /(\[CONFIRM:[^\]]*\])/g;
 
 function renderWithConfirmPlaceholders(content: string) {
@@ -700,6 +718,7 @@ export function DashboardFlow() {
                               {p.explanation}
                             </div>
                           ) : null}
+                          <AnswerDisclosure answer={p.answer} />
                         </td>
                         <td className="py-3 pr-4 align-top">
                           <span className="rounded-full border border-neutral-300 bg-neutral-50 px-2.5 py-1 text-xs text-neutral-700 capitalize">
@@ -757,6 +776,7 @@ export function DashboardFlow() {
                                 {p.explanation}
                               </div>
                             ) : null}
+                            <AnswerDisclosure answer={p.answer} />
                           </td>
                           <td className="py-3 pr-4 align-top">
                             <span className="rounded-full border border-neutral-300 bg-neutral-50 px-2.5 py-1 text-xs text-neutral-700 capitalize">

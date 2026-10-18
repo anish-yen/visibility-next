@@ -31,6 +31,10 @@ class PromptRowOut(BaseModel):
     explanation: str | None = None
     competitor_mentions: list[str] = Field(default_factory=list)
     score_components: dict = Field(default_factory=dict)
+    # The actual answer text this prompt was graded against. Served only on
+    # the owner-scoped detail endpoint so the report can show its evidence.
+    # None on the heuristic fallback path, which grades without an answer.
+    answer: str | None = None
 
 
 class ContentBriefOut(BaseModel):

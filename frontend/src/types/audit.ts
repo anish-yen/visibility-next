@@ -22,6 +22,9 @@ export type PromptRow = {
   intent?: string | null;
   explanation?: string | null;
   names_brand?: boolean | null;
+  /** The answer text this prompt was graded against. Owner-only, detail
+   *  endpoint only; absent on the heuristic fallback path. */
+  answer?: string | null;
 };
 
 export type ContentBrief = {
