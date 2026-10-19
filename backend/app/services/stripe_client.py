@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import stripe
@@ -55,22 +56,68 @@ def create_audit_checkout_session(
     return session.url
 
 
-def parse_webhook_event(payload: bytes, signature_header: str) -> stripe.Event:
+def as_plain_data(value: Any) -> Any:
+    """Recursively convert Stripe SDK objects into plain dicts/lists.
+
+    `StripeObject` (and its subclasses `Event`, `checkout.Session`, ...) is NOT
+    a dict in stripe>=16 and has no `.get`; calling it raises
+    `AttributeError: 'get' is a dict method, but a Session is not a dict`.
+    `to_dict()` is only shallow, so nested values need the same treatment -
+    hence the recursion rather than a single conversion call.
+    """
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {k: as_plain_data(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [as_plain_data(v) for v in value]
+    to_dict = getattr(value, "to_dict", None)
+    if callable(to_dict):
+        return {k: as_plain_data(v) for k, v in to_dict().items()}
+    return value
+
+
+def parse_webhook_event(payload: bytes, signature_header: str) -> dict[str, Any]:
+    """Verify the signature, then return the event as plain nested dicts.
+
+    The SDK verifies authenticity; the data is then read back out of the raw
+    bytes it just verified, so nothing downstream depends on `StripeObject`
+    semantics. Previously this returned the SDK object and callers used
+    `.get()` on it, which raises on stripe>=16 and made every real webhook
+    delivery a 500 - while tests that faked this function with a plain dict
+    passed, because dicts do have `.get`.
+
+    Only parsed AFTER construct_event returns: an unverified payload must
+    never be read as if it were trustworthy.
+    """
     settings = get_settings()
     if not settings.stripe_webhook_secret:
         raise StripeNotConfigured("STRIPE_WEBHOOK_SECRET is not configured")
-    return stripe.Webhook.construct_event(
+    event = stripe.Webhook.construct_event(
         payload, signature_header, settings.stripe_webhook_secret
     )
+    try:
+        return json.loads(payload)
+    except ValueError:
+        # Signature verified but the body is not JSON we can re-read; fall
+        # back to converting the SDK object rather than failing the delivery.
+        return as_plain_data(event)
 
 
-def audit_inputs_from_session(session: dict[str, Any]) -> dict[str, Any] | None:
+def audit_inputs_from_session(session: Any) -> dict[str, Any] | None:
     """Pull the audit-creation inputs back out of a completed session's metadata.
+
+    Accepts a plain dict or a Stripe SDK object: it normalizes first, so a
+    caller that passes the SDK object straight through cannot reintroduce the
+    `.get`-on-StripeObject crash.
 
     Returns None if the session is missing the fields we need (defensive -
     should not happen for sessions this app created, but a webhook handler
     must never crash on an unexpected payload).
     """
+    session = as_plain_data(session)
+    if not isinstance(session, dict):
+        return None
     metadata = session.get("metadata") or {}
     user_id = metadata.get("user_id")
     primary_domain = metadata.get("primary_domain")
