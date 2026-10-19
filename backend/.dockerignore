@@ -1,0 +1,23 @@
+# Keep credentials and local state out of the build context entirely, so they
+# cannot end up in an image layer even though the Dockerfile does `COPY . .`.
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Not needed at runtime. scripts/ is KEPT on purpose: it holds
+# verify_graph_pause.py, which is most useful run where DATABASE_URL
+# already exists (i.e. inside the deployed container).
+tests/
+supabase/
+*.sqlite
+*.db
+.git/
+.gitignore

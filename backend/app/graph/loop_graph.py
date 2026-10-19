@@ -40,8 +40,10 @@ from app.graph.state import LoopState, new_budget
 __all__ = [
     "LOOP_ENGINE_ENV",
     "build_graph",
+    "get_pending_review",
     "graph_engine_selected",
     "initial_state",
+    "resume_graph_cycle",
     "run_graph_cycle",
 ]
 
@@ -144,3 +146,70 @@ async def run_graph_cycle(
         await saver.setup()
         graph = build_graph(saver)
         return await graph.ainvoke(state, config=config)
+
+
+def _thread(audit_id: str) -> dict[str, Any]:
+    return {"configurable": {"thread_id": audit_id}}
+
+
+async def get_pending_review(
+    audit_id: str, *, checkpointer: Any = None
+) -> dict[str, Any] | None:
+    """What this audit's graph is currently waiting on, or None.
+
+    Reads the checkpoint without advancing the graph, so it is safe to poll.
+    Returns None both when no run exists and when a run exists but is not
+    paused - the caller cannot act on either.
+    """
+
+    async def _read(saver: Any) -> dict[str, Any] | None:
+        graph = build_graph(saver)
+        snapshot = await graph.aget_state(_thread(audit_id))
+        if snapshot is None:
+            return None
+        interrupts = list(getattr(snapshot, "interrupts", ()) or ())
+        if not interrupts:
+            return None
+        return {
+            "awaiting": "artifact_review",
+            "payload": getattr(interrupts[0], "value", interrupts[0]),
+            "next_nodes": list(snapshot.next or ()),
+        }
+
+    if checkpointer is not None:
+        return await _read(checkpointer)
+
+    from app.graph.checkpointer import build_checkpointer
+
+    async with build_checkpointer() as saver:
+        await saver.setup()
+        return await _read(saver)
+
+
+async def resume_graph_cycle(
+    audit_id: str, decision: dict[str, Any], *, checkpointer: Any = None
+) -> dict[str, Any]:
+    """Resume a graph paused at the review gate.
+
+    `decision` is the payload `human_review_node` expects:
+    {"decision": "approve"|"revise"|"reject", "published": bool,
+     "reviewer": str|None, "notes": str|None}.
+
+    Note that resuming with approve+published runs the independent re-test,
+    which spends real answer-engine calls against the run's budget.
+    """
+
+    async def _run(saver: Any) -> dict[str, Any]:
+        graph = build_graph(saver)
+        from langgraph.types import Command
+
+        return await graph.ainvoke(Command(resume=decision), config=_thread(audit_id))
+
+    if checkpointer is not None:
+        return await _run(checkpointer)
+
+    from app.graph.checkpointer import build_checkpointer
+
+    async with build_checkpointer() as saver:
+        await saver.setup()
+        return await _run(saver)

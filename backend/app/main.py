@@ -2,7 +2,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.middleware import SupabaseJWTAuthMiddleware
-from app.routers import audits
+from app.routers import audits, review
 
 app = FastAPI(
     title="Zeteum API",
@@ -22,6 +22,10 @@ app.add_middleware(
 )
 
 app.include_router(audits.router)
+# Human review gate for the agentic loop (app/graph). Routes return 503
+# when the durable checkpointer is unconfigured; importing is safe
+# without langgraph because the graph imports happen inside handlers.
+app.include_router(review.router)
 
 
 @app.get("/health")

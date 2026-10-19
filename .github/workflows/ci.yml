@@ -1,0 +1,85 @@
+name: CI
+
+# Every push and every PR. The suite needs no secrets and makes no network
+# calls: tests/conftest.py forces audit_store onto its in-memory path, and
+# every Gemini / answer-engine / crawler call in the tests is faked. If a test
+# ever needs a real credential, that is a bug in the test, not a reason to add
+# secrets here.
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: backend tests (py3.14)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # 3.14.7 is the version the langgraph / psycopg pins were verified
+          # against. See PLAN.md.
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - run: pip install --upgrade pip
+      - run: pip install -r requirements-dev.txt
+      - name: pytest
+        run: python -m pytest tests/ -q
+
+  backend-py313:
+    # Informational only, and deliberately non-blocking. Render's Python
+    # version is not pinned anywhere in this repo, so it may not be 3.14.
+    # A green run here is evidence the deps also resolve on 3.13; a red one
+    # tells us to pin Python on Render before relying on the graph there.
+    name: backend deps on py3.13 (informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - run: pip install --upgrade pip
+      - run: pip install -r requirements-dev.txt
+      - run: python -m pytest tests/ -q
+
+  frontend:
+    name: frontend typecheck / lint / build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit -p .
+      - run: npm run lint
+      - name: next build
+        # Supabase env vars are read at runtime in the browser, not baked in,
+        # so placeholders are enough to type-check and compile.
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key
+          NEXT_PUBLIC_API_URL: http://localhost:8000
+        run: npm run build
