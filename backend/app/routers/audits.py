@@ -5,7 +5,7 @@ import logging
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
-from app import audit_pipeline, audit_store, cycle_store, loop_runner
+from app import audit_pipeline, audit_store, cycle_store, job_dispatch, loop_runner
 from app.config import get_settings
 from app.schemas_audit import (
     AuditCreateBody,
@@ -60,7 +60,7 @@ async def _reject_non_public_domains(body: AuditCreateBody) -> None:
 
 def _start_audit(user_id: str, primary_domain: str, competitor_domains: list[str], industry: str | None):
     state = audit_store.create_audit(user_id, primary_domain, competitor_domains, industry)
-    asyncio.create_task(audit_pipeline.run_audit(state.id))
+    job_dispatch.enqueue_audit(state.id)
     return state
 
 
